@@ -1,10 +1,9 @@
 import os
 import logging
-import openai
-from typing import Dict, Any, Optional, List
-from dotenv import load_dotenv
 import time
 import pandas as pd
+from typing import Dict, Any, Optional, List
+from dotenv import load_dotenv
 
 # Configure logging
 os.makedirs('logs', exist_ok=True)
@@ -28,9 +27,24 @@ class MessageGenerator:
         if not self.api_key:
             logger.error("Missing OpenAI API key in .env file.")
             raise ValueError("Missing OpenAI API key.")
-        openai.api_key = self.api_key
+        
         self.model = model
         logger.info(f"Initialized MessageGenerator with model: {model}")
+        
+        # Initialize OpenAI client - compatible with both v1.x and earlier versions
+        try:
+            # First, try the newer OpenAI client (v1.x+)
+            from openai import OpenAI
+            self.client = OpenAI(api_key=self.api_key)
+            self.client_version = "v1"
+            logger.info("Using OpenAI API v1.x client")
+        except (ImportError, AttributeError):
+            # Fall back to the older API
+            import openai
+            openai.api_key = self.api_key
+            self.client = openai
+            self.client_version = "legacy"
+            logger.info("Using OpenAI API legacy client")
 
     def generate_message(self, lead_data: Dict[str, Any], retries: int = 3) -> Optional[str]:
         """Generates a personalized outreach message using OpenAI's GPT model."""
@@ -58,14 +72,31 @@ class MessageGenerator:
         
         for attempt in range(retries):
             try:
-                response = openai.ChatCompletion.create(
-                    model=self.model,
-                    messages=[{"role": "system", "content": "You are an expert outreach specialist for a professional life coaching business."},
-                              {"role": "user", "content": prompt}],
-                    temperature=0.7,
-                    max_tokens=500
-                )
-                message = response["choices"][0]["message"]["content"].strip()
+                if self.client_version == "v1":
+                    # New client API style
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": "You are an expert outreach specialist for a professional life coaching business."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.7,
+                        max_tokens=500
+                    )
+                    message = response.choices[0].message.content.strip()
+                else:
+                    # Legacy API style
+                    response = self.client.ChatCompletion.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": "You are an expert outreach specialist for a professional life coaching business."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.7,
+                        max_tokens=500
+                    )
+                    message = response["choices"][0]["message"]["content"].strip()
+                
                 return message
             except Exception as e:
                 logger.error(f"OpenAI API error: {e}")
@@ -164,23 +195,37 @@ class MessageGenerator:
                 )
                 
                 # Generate Reddit-specific message
+                message = None
                 for attempt in range(3):
                     try:
-                        response = openai.ChatCompletion.create(
-                            model=self.model,
-                            messages=[
-                                {"role": "system", "content": "You are an empathetic outreach specialist for a professional life coaching business."},
-                                {"role": "user", "content": reddit_prompt}
-                            ],
-                            temperature=0.7,
-                            max_tokens=500
-                        )
-                        message = response["choices"][0]["message"]["content"].strip()
+                        if self.client_version == "v1":
+                            # New client API style
+                            response = self.client.chat.completions.create(
+                                model=self.model,
+                                messages=[
+                                    {"role": "system", "content": "You are an empathetic outreach specialist for a professional life coaching business."},
+                                    {"role": "user", "content": reddit_prompt}
+                                ],
+                                temperature=0.7,
+                                max_tokens=500
+                            )
+                            message = response.choices[0].message.content.strip()
+                        else:
+                            # Legacy API style
+                            response = self.client.ChatCompletion.create(
+                                model=self.model,
+                                messages=[
+                                    {"role": "system", "content": "You are an empathetic outreach specialist for a professional life coaching business."},
+                                    {"role": "user", "content": reddit_prompt}
+                                ],
+                                temperature=0.7,
+                                max_tokens=500
+                            )
+                            message = response["choices"][0]["message"]["content"].strip()
                         break
                     except Exception as e:
                         logger.error(f"OpenAI API error for Reddit message: {e}")
                         time.sleep(2 ** attempt)
-                        message = None
                 
                 if message:
                     # Add message to lead data
