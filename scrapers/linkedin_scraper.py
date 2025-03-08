@@ -4,7 +4,7 @@ import time
 import random
 import requests
 import zipfile
-from datetime import datetime  # Added import for datetime
+import win32api
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -15,7 +15,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import WebDriverException, NoSuchElementException, TimeoutException, StaleElementReferenceException
 from dotenv import load_dotenv
-from typing import List, Dict, Any, Optional
 
 # Load environment variables
 load_dotenv()
@@ -33,41 +32,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger('linkedin_scraper')
 
-# Get ChromeDriver path from environment variable or use default paths
-def get_chromedriver_path():
-    """Get the ChromeDriver path from environment variables or use sensible defaults."""
-    env_path = os.getenv('CHROMEDRIVER_PATH')
-    if env_path and os.path.exists(env_path):
-        return env_path
-        
-    # Try to find ChromeDriver in common locations
-    possible_paths = [
-        # Current directory
-        os.path.join(os.getcwd(), "chromedriver.exe"),
-        os.path.join(os.getcwd(), "chromedriver"),
-        
-        # Tool directory
-        os.path.join(os.getcwd(), "tools", "chromedriver.exe"),
-        os.path.join(os.getcwd(), "tools", "chromedriver"),
-        
-        # Drivers directory
-        os.path.join(os.getcwd(), "drivers", "chromedriver.exe"),
-        os.path.join(os.getcwd(), "drivers", "chromedriver"),
-        
-        # Old hard-coded path as fallback
-        os.path.join("D:/lead_gen_tool/", "chromedriver.exe"),
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            logger.info(f"Found ChromeDriver at: {path}")
-            return path
-            
-    # Return the first path as default - this will fail if the file doesn't exist
-    # but at least the error will be clear about where it was looking
-    return possible_paths[0]
-
-CHROMEDRIVER_PATH = get_chromedriver_path()
+CHROMEDRIVER_DIR = "D:/lead_gen_tool/"
+CHROMEDRIVER_PATH = os.path.join(CHROMEDRIVER_DIR, "chromedriver.exe")
+FORCE_CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 
 # Define target audiences for life coaching
 TARGET_INDUSTRIES = [
@@ -116,7 +83,7 @@ TARGET_KEYWORDS = [
 class LinkedInScraper:
     """Scraper for extracting LinkedIn lead data for life coaching."""
 
-    def __init__(self, headless=False, chromedriver_path=None):
+    def __init__(self, headless=False):
         """Initialize the LinkedIn scraper with a Selenium WebDriver."""
         self.username = os.getenv("LINKEDIN_USERNAME")
         self.password = os.getenv("LINKEDIN_PASSWORD")
@@ -131,17 +98,13 @@ class LinkedInScraper:
         # Add anti-bot measures
         options = self._add_anti_bot_measures(options)
         
-        # Use provided path or default
-        driver_path = chromedriver_path or CHROMEDRIVER_PATH
-        
         # Ensure ChromeDriver exists
-        if not os.path.exists(driver_path):
-            logger.error(f"ChromeDriver not found at {driver_path}")
-            raise FileNotFoundError(f"ChromeDriver not found at {driver_path}. Please set the CHROMEDRIVER_PATH environment variable or ensure it is downloaded.")
+        if not os.path.exists(CHROMEDRIVER_PATH):
+            raise FileNotFoundError(f"ChromeDriver not found at {CHROMEDRIVER_PATH}. Ensure it is downloaded.")
 
         # Start WebDriver
         try:
-            service = Service(driver_path)
+            service = Service(CHROMEDRIVER_PATH)
             self.driver = webdriver.Chrome(service=service, options=options)
             
             # Apply stealth mode
@@ -153,7 +116,7 @@ class LinkedInScraper:
                 """
             })
             
-            logger.info(f"Successfully initialized WebDriver with ChromeDriver at {driver_path}.")
+            logger.info(f"Successfully initialized WebDriver with ChromeDriver at {CHROMEDRIVER_PATH}.")
         except WebDriverException as e:
             logger.error(f"WebDriver failed to start: {str(e)}")
             raise RuntimeError("Failed to start Chrome WebDriver. Ensure Chrome and ChromeDriver are compatible.")
@@ -746,25 +709,9 @@ class LinkedInScraper:
         """Save profiles to CSV file."""
         import csv
         
-        if not profiles:
-            logger.warning
-if not profiles:
-            logger.warning(f"No profiles to save to {filename}")
-            return
-        
         # Define CSV columns
         fieldnames = ["index", "name", "headline", "location", "profile_url", 
                     "coaching_fit_score", "coaching_notes"]
-        
-        # Ensure directory exists
-        try:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-        except PermissionError:
-            logger.error(f"Permission denied when creating directory for {filename}")
-            return
-        except OSError as e:
-            logger.error(f"OS error when creating directory for {filename}: {str(e)}")
-            return
         
         try:
             with open(filename, "w", newline="", encoding="utf-8") as f:
@@ -779,77 +726,14 @@ if not profiles:
                     writer.writerow(row)
             
             logger.info(f"Saved {len(profiles)} profiles to {filename}")
-        except PermissionError:
-            logger.error(f"Permission denied when writing to {filename}")
-        except UnicodeEncodeError:
-            logger.error(f"Unicode encode error when writing to {filename}. Try a different encoding.")
-            # Try with a fallback encoding
-            try:
-                with open(filename, "w", newline="", encoding="latin-1") as f:
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
-                    writer.writeheader()
-                    
-                    for i, profile in enumerate(profiles):
-                        # Ensure all fields exist and handle encoding issues
-                        row = {}
-                        for field in fieldnames:
-                            value = profile.get(field, "")
-                            # Handle potential encoding issues by replacing problematic characters
-                            if isinstance(value, str):
-                                value = value.encode('latin-1', 'replace').decode('latin-1')
-                            row[field] = value
-                        
-                        # Always set index
-                        row["index"] = i + 1
-                        writer.writerow(row)
-                
-                logger.info(f"Saved {len(profiles)} profiles to {filename} with latin-1 encoding")
-            except Exception as inner_e:
-                logger.error(f"Failed to save with fallback encoding: {str(inner_e)}")
-        except IOError as e:
-            logger.error(f"IO error when saving to {filename}: {str(e)}")
         except Exception as e:
             logger.error(f"Error saving profiles to CSV: {str(e)}")
 
-    def scrape_by_industry_and_role(self, industry="Technology", role="Software Engineer", num_pages=3):
-        """
-        Scrapes LinkedIn profiles based on industry and job role.
-        
-        Args:
-            industry (str): The industry to search for.
-            role (str): The job role to search for.
-            num_pages (int): The number of pages to scrape.
-            
-        Returns:
-            list: A list of dictionaries containing profile data.
-        """
-        logger.info(f"Starting LinkedIn scrape for industry: {industry}, role: {role}")
-        
-        # Ensure the scraper is logged in before searching
-        if not self._is_logged_in():
-            logger.warning("Not logged in. Logging in first.")
-            self.login()
-        
-        # Format search query
-        search_query = f"{industry} {role}"
-        
-        # Use a more specific search URL with additional parameters
-        search_url = f"https://www.linkedin.com/search/results/people/?keywords={search_query.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER&sid=kgM"
-        
-        # Call the main scrape_profiles method with our constructed URL
-        return self.scrape_profiles(search_url, num_pages)
-
     def _is_logged_in(self):
         """Check if the user is logged in to LinkedIn."""
-        if not hasattr(self, 'driver') or self.driver is None:
-            return False
-        try:
-            current_url = self.driver.current_url
-            return "feed" in current_url or "mynetwork" in current_url or "messaging" in current_url
-        except Exception as e:
-            logger.error(f"Error checking login status: {str(e)}")
-            return False
-
+        current_url = self.driver.current_url
+        return "feed" in current_url or "mynetwork" in current_url or "messaging" in current_url
+        
     def _extract_profile_data(self, container, index):
         """Extract profile data from a container."""
         profile_data = {}
@@ -952,13 +836,41 @@ if not profiles:
         else:
             logger.warning(f"Profile {index+1}: Could not extract any data")
             return profile_data
-            
+
     def close(self):
         """Close the browser and clean up resources."""
         if self.driver:
             self.driver.quit()
             logger.info("WebDriver closed.")
             
+    def scrape_by_industry_and_role(self, industry="Technology", role="Software Engineer", num_pages=3):
+        """
+        Scrapes LinkedIn profiles based on industry and job role.
+        
+        Args:
+            industry (str): The industry to search for.
+            role (str): The job role to search for.
+            num_pages (int): The number of pages to scrape.
+            
+        Returns:
+            list: A list of dictionaries containing profile data.
+        """
+        logger.info(f"Starting LinkedIn scrape for industry: {industry}, role: {role}")
+        
+        # Ensure the scraper is logged in before searching
+        if not self._is_logged_in():
+            logger.warning("Not logged in. Logging in first.")
+            self.login()
+        
+        # Format search query
+        search_query = f"{industry} {role}"
+        
+        # Use a more specific search URL with additional parameters
+        search_url = f"https://www.linkedin.com/search/results/people/?keywords={search_query.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER&sid=kgM"
+        
+        # Call the main scrape_profiles method with our constructed URL
+        return self.scrape_profiles(search_url, num_pages)
+    
     def scrape_for_coaching_leads(self, num_pages=3, target_count=50):
         """
         Scrape LinkedIn for potential life coaching leads by trying different combinations
@@ -1029,70 +941,3 @@ if not profiles:
         
         logger.info(f"Found {len(all_leads)} unique potential life coaching leads")
         return all_leads
-
-
-def run_linkedin_scraper(sheets_client=None, 
-                         max_leads=50, 
-                         headless=True, 
-                         chromedriver_path=None):
-    """
-    Run the LinkedIn scraper as a standalone function.
-    
-    Args:
-        sheets_client: Google Sheets client for saving results
-        max_leads: Maximum number of leads to collect
-        headless: Whether to run browser in headless mode
-        chromedriver_path: Custom path to ChromeDriver executable
-        
-    Returns:
-        List of leads collected
-    """
-    try:
-        # Create the scraper with provided parameters
-        scraper = LinkedInScraper(
-            headless=headless,
-            chromedriver_path=chromedriver_path
-        )
-        
-        # Login to LinkedIn
-        scraper.login()
-        
-        # Run comprehensive search
-        leads = scraper.scrape_for_coaching_leads(
-            num_pages=3,
-            target_count=max_leads
-        )
-        
-        # Save to Google Sheets if client provided
-        if sheets_client:
-            try:
-                worksheet = sheets_client.open('LeadGenerationData').worksheet('LinkedInLeads')
-                
-                # Prepare data
-                rows = []
-                for lead in leads:
-                    row = [
-                        lead.get('name', 'Unknown'),
-                        lead.get('headline', ''),
-                        lead.get('location', ''),
-                        lead.get('coaching_fit_score', 0),
-                        lead.get('profile_url', ''),
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    ]
-                    rows.append(row)
-                
-                # Add to sheet
-                for row in rows:
-                    worksheet.append_row(row)
-                
-                logger.info(f"Added {len(rows)} leads to Google Sheets")
-            except Exception as e:
-                logger.error(f"Error saving to Google Sheets: {str(e)}")
-        
-        # Clean up
-        scraper.close()
-        
-        return leads
-    except Exception as e:
-        logger.error(f"Error running LinkedIn scraper: {str(e)}")
-        raise
