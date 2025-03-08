@@ -1,0 +1,132 @@
+"""
+Utility functions for LinkedIn scraper.
+"""
+
+import os
+import time
+import random
+import logging
+import platform
+from selenium.webdriver.chrome.options import Options
+
+# Configure logging
+logger = logging.getLogger('linkedin.utils')
+
+# Define fixed path for ChromeDriver
+CHROMEDRIVER_PATH = "D:/lead_gen_tool/chromedriver.exe"
+
+# Alternate paths to check if the primary path doesn't exist
+ALTERNATE_PATHS = [
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "drivers", "chromedriver.exe"),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "chromedriver.exe"),
+    "chromedriver.exe",  # Check in current working directory
+    os.path.join(os.getcwd(), "chromedriver.exe")
+]
+
+def find_chromedriver():
+    """Find the ChromeDriver executable path."""
+    if os.path.exists(CHROMEDRIVER_PATH):
+        logger.info(f"Found ChromeDriver at fixed path: {CHROMEDRIVER_PATH}")
+        return CHROMEDRIVER_PATH
+    
+    # Check alternate paths
+    for path in ALTERNATE_PATHS:
+        if os.path.exists(path):
+            logger.info(f"Found ChromeDriver at alternate path: {path}")
+            return path
+    
+    # If we get here, no ChromeDriver was found
+    logger.error("ChromeDriver not found in any expected location.")
+    logger.error(f"Tried: {CHROMEDRIVER_PATH} and {ALTERNATE_PATHS}")
+    raise FileNotFoundError("ChromeDriver not found. Please ensure it is in one of the expected locations.")
+
+def get_random_user_agent():
+    """Return a random user agent string to avoid detection."""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0"
+    ]
+    return random.choice(user_agents)
+
+def configure_chrome_options(headless=False):
+    """
+    Configure Chrome options with anti-bot measures.
+    
+    Args:
+        headless: Whether to run Chrome in headless mode
+        
+    Returns:
+        Configured Chrome options
+    """
+    options = Options()
+    if headless:
+        options.add_argument("--headless")
+    
+    # Randomize user agent
+    options.add_argument(f"user-agent={get_random_user_agent()}")
+    
+    # Add additional plugins and preferences
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    
+    # Additional advanced options
+    prefs = {
+        "profile.default_content_setting_values.notifications": 2,
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+        "profile.default_content_settings.popups": 0,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    }
+    options.add_experimental_option("prefs", prefs)
+    
+    # Basic anti-detection measures
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--start-maximized")
+    
+    return options
+
+def random_sleep(min_seconds=1, max_seconds=3):
+    """Sleep for a random amount of time to avoid detection."""
+    sleep_time = random.uniform(min_seconds, max_seconds)
+    time.sleep(sleep_time)
+    return sleep_time
+
+def save_profiles_to_csv(profiles, filename):
+    """
+    Save profiles to CSV file.
+    
+    Args:
+        profiles: List of profile dictionaries
+        filename: Output CSV filename
+    """
+    import csv
+    
+    # Define CSV columns
+    fieldnames = ["index", "name", "headline", "location", "profile_url", 
+                "coaching_fit_score", "coaching_notes"]
+    
+    try:
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for i, profile in enumerate(profiles):
+                # Ensure all fields exist
+                row = {field: profile.get(field, "") for field in fieldnames}
+                # Always set index
+                row["index"] = i + 1
+                writer.writerow(row)
+        
+        logger.info(f"Saved {len(profiles)} profiles to {filename}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving profiles to CSV: {str(e)}")
+        return False
