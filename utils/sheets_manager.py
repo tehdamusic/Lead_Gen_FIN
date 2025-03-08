@@ -168,6 +168,9 @@ def append_rows(worksheet: gspread.Worksheet, rows: list) -> None:
 if __name__ == "__main__":
     # Test functionality
     try:
+        # Import datetime here for the test
+        from datetime import datetime
+        
         client = get_sheets_client()
         worksheet = create_sheet_if_not_exists('LeadGenerationData', 'TestData')
         append_rows(worksheet, [['Test', 'Data', datetime.now().strftime("%Y-%m-%d %H:%M:%S")]])
