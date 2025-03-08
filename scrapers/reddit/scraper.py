@@ -281,6 +281,14 @@ class RedditScraper:
             True if saving was successful, False otherwise
         """
         try:
+            if not sheets_client:
+                logger.warning("No sheets client provided, skipping saving to Google Sheets")
+                return False
+                
+            if not leads:
+                logger.warning("No leads to save to Google Sheets")
+                return False
+            
             logger.info(f"Saving {len(leads)} Reddit leads to Google Sheets")
             
             # Prepare data for sheets
