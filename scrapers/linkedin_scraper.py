@@ -4,6 +4,7 @@ import time
 import random
 import requests
 import zipfile
+from datetime import datetime  # Added import for datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -14,10 +15,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import WebDriverException, NoSuchElementException, TimeoutException, StaleElementReferenceException
 from dotenv import load_dotenv
-from datetime import datetime
+from typing import List, Dict, Any, Optional
 
 # Load environment variables
 load_dotenv()
+
+# Ensure logs directory exists
+os.makedirs('logs', exist_ok=True)
+os.makedirs('debug', exist_ok=True)  # Create a debug directory
+os.makedirs('data', exist_ok=True)   # Create a data directory for results
 
 # Configure logging
 logging.basicConfig(
@@ -110,7 +116,7 @@ TARGET_KEYWORDS = [
 class LinkedInScraper:
     """Scraper for extracting LinkedIn lead data for life coaching."""
 
-    def __init__(self, headless=False):
+    def __init__(self, headless=False, chromedriver_path=None):
         """Initialize the LinkedIn scraper with a Selenium WebDriver."""
         self.username = os.getenv("LINKEDIN_USERNAME")
         self.password = os.getenv("LINKEDIN_PASSWORD")
@@ -125,13 +131,17 @@ class LinkedInScraper:
         # Add anti-bot measures
         options = self._add_anti_bot_measures(options)
         
+        # Use provided path or default
+        driver_path = chromedriver_path or CHROMEDRIVER_PATH
+        
         # Ensure ChromeDriver exists
-        if not os.path.exists(CHROMEDRIVER_PATH):
-            raise FileNotFoundError(f"ChromeDriver not found at {CHROMEDRIVER_PATH}. Ensure it is downloaded.")
+        if not os.path.exists(driver_path):
+            logger.error(f"ChromeDriver not found at {driver_path}")
+            raise FileNotFoundError(f"ChromeDriver not found at {driver_path}. Please set the CHROMEDRIVER_PATH environment variable or ensure it is downloaded.")
 
         # Start WebDriver
         try:
-            service = Service(CHROMEDRIVER_PATH)
+            service = Service(driver_path)
             self.driver = webdriver.Chrome(service=service, options=options)
             
             # Apply stealth mode
@@ -143,7 +153,7 @@ class LinkedInScraper:
                 """
             })
             
-            logger.info(f"Successfully initialized WebDriver with ChromeDriver at {CHROMEDRIVER_PATH}.")
+            logger.info(f"Successfully initialized WebDriver with ChromeDriver at {driver_path}.")
         except WebDriverException as e:
             logger.error(f"WebDriver failed to start: {str(e)}")
             raise RuntimeError("Failed to start Chrome WebDriver. Ensure Chrome and ChromeDriver are compatible.")
@@ -736,9 +746,25 @@ class LinkedInScraper:
         """Save profiles to CSV file."""
         import csv
         
+        if not profiles:
+            logger.warning
+if not profiles:
+            logger.warning(f"No profiles to save to {filename}")
+            return
+        
         # Define CSV columns
         fieldnames = ["index", "name", "headline", "location", "profile_url", 
                     "coaching_fit_score", "coaching_notes"]
+        
+        # Ensure directory exists
+        try:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+        except PermissionError:
+            logger.error(f"Permission denied when creating directory for {filename}")
+            return
+        except OSError as e:
+            logger.error(f"OS error when creating directory for {filename}: {str(e)}")
+            return
         
         try:
             with open(filename, "w", newline="", encoding="utf-8") as f:
@@ -753,6 +779,35 @@ class LinkedInScraper:
                     writer.writerow(row)
             
             logger.info(f"Saved {len(profiles)} profiles to {filename}")
+        except PermissionError:
+            logger.error(f"Permission denied when writing to {filename}")
+        except UnicodeEncodeError:
+            logger.error(f"Unicode encode error when writing to {filename}. Try a different encoding.")
+            # Try with a fallback encoding
+            try:
+                with open(filename, "w", newline="", encoding="latin-1") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    for i, profile in enumerate(profiles):
+                        # Ensure all fields exist and handle encoding issues
+                        row = {}
+                        for field in fieldnames:
+                            value = profile.get(field, "")
+                            # Handle potential encoding issues by replacing problematic characters
+                            if isinstance(value, str):
+                                value = value.encode('latin-1', 'replace').decode('latin-1')
+                            row[field] = value
+                        
+                        # Always set index
+                        row["index"] = i + 1
+                        writer.writerow(row)
+                
+                logger.info(f"Saved {len(profiles)} profiles to {filename} with latin-1 encoding")
+            except Exception as inner_e:
+                logger.error(f"Failed to save with fallback encoding: {str(inner_e)}")
+        except IOError as e:
+            logger.error(f"IO error when saving to {filename}: {str(e)}")
         except Exception as e:
             logger.error(f"Error saving profiles to CSV: {str(e)}")
 
@@ -903,6 +958,78 @@ class LinkedInScraper:
         if self.driver:
             self.driver.quit()
             logger.info("WebDriver closed.")
+            
+    def scrape_for_coaching_leads(self, num_pages=3, target_count=50):
+        """
+        Scrape LinkedIn for potential life coaching leads by trying different combinations
+        of industries, roles, and keywords to find the best prospects.
+        
+        Args:
+            num_pages (int): Number of pages to scrape per search
+            target_count (int): Target number of leads to find before stopping
+            
+        Returns:
+            list: A list of dictionaries containing profile data
+        """
+        all_leads = []
+        seen_urls = set()
+        
+        # Try combinations of industries and roles
+        for industry in TARGET_INDUSTRIES:
+            if len(all_leads) >= target_count:
+                break
+                
+            for role in TARGET_ROLES:
+                if len(all_leads) >= target_count:
+                    break
+                    
+                # Create search query
+                search_query = f"{industry} {role}"
+                logger.info(f"Searching for: {search_query}")
+                
+                # Search and get results
+                results = self.scrape_by_industry_and_role(industry, role, num_pages)
+                
+                # Add new unique results
+                for result in results:
+                    if "profile_url" in result and result["profile_url"] not in seen_urls:
+                        seen_urls.add(result["profile_url"])
+                        all_leads.append(result)
+                
+                # Sleep a bit to avoid rate limiting
+                time.sleep(random.uniform(5, 10))
+        
+        # Try specific coaching-related keywords as well
+        if len(all_leads) < target_count:
+            for keyword in TARGET_KEYWORDS:
+                if len(all_leads) >= target_count:
+                    break
+                    
+                # Create search URL
+                search_url = f"https://www.linkedin.com/search/results/people/?keywords={keyword.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER&sid=kgM"
+                logger.info(f"Searching for keyword: {keyword}")
+                
+                # Search and get results
+                results = self.scrape_profiles(search_url, num_pages=2)  # Fewer pages for keyword searches
+                
+                # Add new unique results
+                for result in results:
+                    if "profile_url" in result and result["profile_url"] not in seen_urls:
+                        seen_urls.add(result["profile_url"])
+                        all_leads.append(result)
+                
+                # Sleep to avoid rate limiting
+                time.sleep(random.uniform(5, 10))
+        
+        # Sort by coaching fit score (highest first)
+        all_leads.sort(key=lambda x: x.get('coaching_fit_score', 0), reverse=True)
+        
+        # Save to CSV
+        self._save_profiles_to_csv(all_leads, "data/life_coaching_leads.csv")
+        
+        logger.info(f"Found {len(all_leads)} unique potential life coaching leads")
+        return all_leads
+
 
 def run_linkedin_scraper(sheets_client=None, 
                          max_leads=50, 
