@@ -1,11 +1,10 @@
 import os
 import logging
 import openai
-import pandas as pd
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 import time
-import json
+import pandas as pd
 
 # Configure logging
 os.makedirs('logs', exist_ok=True)
@@ -29,9 +28,9 @@ class MessageGenerator:
         if not self.api_key:
             logger.error("Missing OpenAI API key in .env file.")
             raise ValueError("Missing OpenAI API key.")
+        openai.api_key = self.api_key
         self.model = model
-        # Initialize OpenAI client with new SDK format
-        self.client = openai.OpenAI(api_key=self.api_key)
+        logger.info(f"Initialized MessageGenerator with model: {model}")
 
     def generate_message(self, lead_data: Dict[str, Any], retries: int = 3) -> Optional[str]:
         """Generates a personalized outreach message using OpenAI's GPT model."""
@@ -42,31 +41,31 @@ class MessageGenerator:
             
             Name: {lead_data.get('name', 'Unknown')}
             Industry: {lead_data.get('industry', 'Unknown')}
-            {f"Job Title: {lead_data.get('headline', '')}" if lead_data.get('headline') else ""}
-            {f"Location: {lead_data.get('location', '')}" if lead_data.get('location') else ""}
+            Position/Title: {lead_data.get('headline', 'Unknown')}
+            Location: {lead_data.get('location', 'Unknown')}
             Interests: {lead_data.get('interests', 'Unknown')}
             Engagement Level: {lead_data.get('engagement_score', 'Unknown')}
-            {f"Additional Notes: {lead_data.get('coaching_notes', '')}" if lead_data.get('coaching_notes') else ""}
+            Profile URL: {lead_data.get('profile_url', 'Unknown')}
             
-            Keep the message professional, concise, and engaging. The message should be no longer than 2-3 paragraphs.
-            Focus on how professional coaching services could benefit them in their current role.
+            The message should be for someone who might benefit from professional life coaching services.
+            Focus on how coaching can help with career development, work-life balance, leadership skills,
+            or personal growth depending on their position and industry.
+            
+            Keep the message professional, concise, engaging, and authentic. Aim for 150-200 words maximum.
+            Do not use generic phrases like "I noticed your profile" or "I came across your profile".
             """
         )
         
         for attempt in range(retries):
             try:
-                # Using the new OpenAI client library format
-                response = self.client.chat.completions.create(
+                response = openai.ChatCompletion.create(
                     model=self.model,
-                    messages=[
-                        {"role": "system", "content": "You are an expert outreach specialist."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.7
+                    messages=[{"role": "system", "content": "You are an expert outreach specialist for a professional life coaching business."},
+                              {"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=500
                 )
-                
-                # Get message from the updated API response format
-                message = response.choices[0].message.content.strip()
+                message = response["choices"][0]["message"]["content"].strip()
                 return message
             except Exception as e:
                 logger.error(f"OpenAI API error: {e}")
@@ -74,352 +73,321 @@ class MessageGenerator:
         
         logger.error("Failed to generate message after multiple attempts.")
         return None
-
-    def generate_linkedin_messages(self, leads: List[Dict[str, Any]], max_leads: int = 10) -> List[Dict[str, Any]]:
+        
+    def process_linkedin_leads(self, leads_data: List[Dict[str, Any]], max_leads: int = 10) -> List[Dict[str, Any]]:
         """
-        Generate personalized outreach messages for a list of LinkedIn leads.
+        Process LinkedIn leads and generate personalized messages.
         
         Args:
-            leads: List of lead data dictionaries from LinkedIn
+            leads_data: List of LinkedIn lead data
             max_leads: Maximum number of leads to process
             
         Returns:
-            List of lead dictionaries with added 'message' field
+            List of leads with generated messages
         """
-        logger.info(f"Generating messages for {min(len(leads), max_leads)} LinkedIn leads")
+        logger.info(f"Processing up to {max_leads} LinkedIn leads")
         
         processed_leads = []
         count = 0
         
-        for lead in leads:
-            if count >= max_leads:
-                break
-                
+        for lead in leads_data[:max_leads]:
             try:
-                # Process industry from headline if available
-                if 'headline' in lead and lead['headline']:
-                    headline = lead['headline'].lower()
-                    industry_keywords = {
-                        'tech': 'Technology', 
-                        'software': 'Technology',
-                        'financial': 'Finance',
-                        'finance': 'Finance',
-                        'banking': 'Finance',
-                        'health': 'Healthcare',
-                        'medical': 'Healthcare',
-                        'education': 'Education',
-                        'teaching': 'Education',
-                        'consult': 'Consulting',
-                        'media': 'Media',
-                        'market': 'Marketing',
-                        'entrepreneur': 'Entrepreneurship',
-                        'hr': 'Human Resources',
-                        'human resources': 'Human Resources'
-                    }
-                    
-                    # Extract industry from headline
-                    lead_industry = 'General Business'
-                    for keyword, industry in industry_keywords.items():
-                        if keyword in headline:
-                            lead_industry = industry
-                            break
-                            
-                    lead['industry'] = lead_industry
-                else:
-                    lead['industry'] = 'Unknown'
-                
                 # Generate personalized message
                 message = self.generate_message(lead)
                 
                 if message:
-                    lead['message'] = message
+                    # Add message to lead data
+                    lead['generated_message'] = message
+                    lead['message_generated_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    lead['message_status'] = 'generated'
                     processed_leads.append(lead)
                     count += 1
+                    
                     logger.info(f"Generated message for {lead.get('name', 'Unknown')}")
                 else:
                     logger.warning(f"Failed to generate message for {lead.get('name', 'Unknown')}")
+                    lead['message_status'] = 'failed'
+                    processed_leads.append(lead)
                 
-                # Add a small delay between API calls
-                time.sleep(0.5)
+                # Avoid rate limiting
+                time.sleep(1)
                 
             except Exception as e:
                 logger.error(f"Error processing lead {lead.get('name', 'Unknown')}: {str(e)}")
-                continue
+                lead['message_status'] = 'error'
+                processed_leads.append(lead)
         
-        logger.info(f"Successfully generated {len(processed_leads)} LinkedIn messages")
+        logger.info(f"Successfully generated messages for {count} out of {len(processed_leads)} LinkedIn leads")
         return processed_leads
     
-    def generate_reddit_messages(self, leads: List[Dict[str, Any]], max_leads: int = 10) -> List[Dict[str, Any]]:
+    def process_reddit_leads(self, leads_data: List[Dict[str, Any]], max_leads: int = 10) -> List[Dict[str, Any]]:
         """
-        Generate personalized outreach messages for a list of Reddit leads.
+        Process Reddit leads and generate personalized messages.
         
         Args:
-            leads: List of lead data dictionaries from Reddit
+            leads_data: List of Reddit lead data
             max_leads: Maximum number of leads to process
             
         Returns:
-            List of lead dictionaries with added 'message' field
+            List of leads with generated messages
         """
-        logger.info(f"Generating messages for {min(len(leads), max_leads)} Reddit leads")
+        logger.info(f"Processing up to {max_leads} Reddit leads")
         
         processed_leads = []
         count = 0
         
-        for lead in leads:
-            if count >= max_leads:
-                break
-                
+        for lead in leads_data[:max_leads]:
             try:
-                # Extract more context for the message generation
-                subreddit = lead.get('subreddit', 'Unknown')
-                keywords = lead.get('matched_keywords', '').split(', ')
-                post_title = lead.get('post_title', '')
-                post_snippet = lead.get('post_content', '')[:200] + '...' if len(lead.get('post_content', '')) > 200 else lead.get('post_content', '')
+                # Extract context from post content
+                context = lead.get('post_content', '')[:1000] if lead.get('post_content') else ''
                 
-                # Prepare lead data with Reddit-specific information
-                reddit_lead = {
-                    'name': lead.get('username', 'Redditor'),
-                    'industry': 'Unknown',
-                    'interests': ', '.join(keywords) if keywords else 'career development',
-                    'engagement_score': lead.get('score', 0),
-                    'reddit_context': f"Posted in r/{subreddit} about: '{post_title}' with content: '{post_snippet}'",
-                    'matched_keywords': lead.get('matched_keywords', '')
-                }
+                # Add additional context for Reddit-specific message
+                lead['interests'] = lead.get('matched_keywords', '')
+                lead['industry'] = 'Unknown (Reddit user)'
                 
-                # Generate personalized message
-                message = self.generate_message(reddit_lead)
+                # Customize prompt for Reddit
+                reddit_prompt = (
+                    f"""
+                    Generate a personalized and empathetic Reddit DM to a user who posted about:
+                    
+                    Topic: {lead.get('matched_keywords', 'Unknown')}
+                    Post Title: {lead.get('post_title', 'Unknown')}
+                    Reddit Username: {lead.get('username', 'Unknown')}
+                    
+                    Here's an excerpt from their post for context:
+                    "{context}"
+                    
+                    Your message should be helpful and not sales-y. Position yourself as a professional 
+                    life coach who can help with their specific situation. Be authentic, empathetic, and 
+                    relate to their concerns. Keep it under 150 words and conversational for Reddit.
+                    """
+                )
+                
+                # Generate Reddit-specific message
+                for attempt in range(3):
+                    try:
+                        response = openai.ChatCompletion.create(
+                            model=self.model,
+                            messages=[
+                                {"role": "system", "content": "You are an empathetic outreach specialist for a professional life coaching business."},
+                                {"role": "user", "content": reddit_prompt}
+                            ],
+                            temperature=0.7,
+                            max_tokens=500
+                        )
+                        message = response["choices"][0]["message"]["content"].strip()
+                        break
+                    except Exception as e:
+                        logger.error(f"OpenAI API error for Reddit message: {e}")
+                        time.sleep(2 ** attempt)
+                        message = None
                 
                 if message:
-                    lead['message'] = message
+                    # Add message to lead data
+                    lead['generated_message'] = message
+                    lead['message_generated_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    lead['message_status'] = 'generated'
                     processed_leads.append(lead)
                     count += 1
+                    
                     logger.info(f"Generated message for Reddit user {lead.get('username', 'Unknown')}")
                 else:
                     logger.warning(f"Failed to generate message for Reddit user {lead.get('username', 'Unknown')}")
+                    lead['message_status'] = 'failed'
+                    processed_leads.append(lead)
                 
-                # Add a small delay between API calls
-                time.sleep(0.5)
+                # Avoid rate limiting
+                time.sleep(1)
                 
             except Exception as e:
                 logger.error(f"Error processing Reddit lead {lead.get('username', 'Unknown')}: {str(e)}")
-                continue
+                lead['message_status'] = 'error'
+                processed_leads.append(lead)
         
-        logger.info(f"Successfully generated {len(processed_leads)} Reddit messages")
+        logger.info(f"Successfully generated messages for {count} out of {len(processed_leads)} Reddit leads")
         return processed_leads
     
-    def save_messages_to_csv(self, linkedin_leads: List[Dict[str, Any]], reddit_leads: List[Dict[str, Any]]) -> bool:
+    def save_messages_to_csv(self, leads: List[Dict[str, Any]], filename: str) -> bool:
         """
-        Save generated messages to CSV files.
+        Save leads with generated messages to CSV file.
         
         Args:
-            linkedin_leads: List of LinkedIn leads with messages
-            reddit_leads: List of Reddit leads with messages
+            leads: List of leads with generated messages
+            filename: Output CSV filename
             
         Returns:
-            True if successful, False otherwise
+            True if saving was successful, False otherwise
         """
         try:
-            os.makedirs('data/output', exist_ok=True)
-            
-            # Save LinkedIn messages
-            if linkedin_leads:
-                linkedin_df = pd.DataFrame(linkedin_leads)
-                linkedin_df.to_csv('data/output/linkedin_messages.csv', index=False)
-                logger.info(f"Saved {len(linkedin_leads)} LinkedIn messages to CSV")
-            
-            # Save Reddit messages
-            if reddit_leads:
-                reddit_df = pd.DataFrame(reddit_leads)
-                reddit_df.to_csv('data/output/reddit_messages.csv', index=False)
-                logger.info(f"Saved {len(reddit_leads)} Reddit messages to CSV")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error saving messages to CSV: {str(e)}")
-            return False
-    
-    def update_sheets(self, sheets_client, linkedin_leads: List[Dict[str, Any]], reddit_leads: List[Dict[str, Any]]) -> bool:
-        """
-        Update Google Sheets with generated messages.
-        
-        Args:
-            sheets_client: Google Sheets client
-            linkedin_leads: List of LinkedIn leads with messages
-            reddit_leads: List of Reddit leads with messages
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            if not sheets_client:
-                logger.warning("No Google Sheets client provided")
+            if not leads:
+                logger.warning("No leads with messages to save to CSV")
                 return False
+                
+            # Convert to DataFrame
+            df = pd.DataFrame(leads)
             
-            # Update LinkedIn leads worksheet
-            if linkedin_leads:
-                try:
-                    linkedin_worksheet = sheets_client.open('LeadGenerationData').worksheet('LinkedInMessages')
-                    
-                    # Clear existing content
-                    linkedin_worksheet.clear()
-                    
-                    # Prepare headers
-                    headers = ['Name', 'Position', 'Location', 'Profile URL', 'Message', 'Date Generated']
-                    linkedin_worksheet.append_row(headers)
-                    
-                    # Add data rows
-                    now = time.strftime("%Y-%m-%d %H:%M:%S")
-                    for lead in linkedin_leads:
-                        row = [
-                            lead.get('name', 'Unknown'),
-                            lead.get('headline', ''),
-                            lead.get('location', ''),
-                            lead.get('profile_url', ''),
-                            lead.get('message', ''),
-                            now
-                        ]
-                        linkedin_worksheet.append_row(row)
-                    
-                    logger.info(f"Updated Google Sheets with {len(linkedin_leads)} LinkedIn messages")
-                except Exception as e:
-                    logger.error(f"Error updating LinkedIn worksheet: {str(e)}")
-            
-            # Update Reddit leads worksheet
-            if reddit_leads:
-                try:
-                    reddit_worksheet = sheets_client.open('LeadGenerationData').worksheet('RedditMessages')
-                    
-                    # Clear existing content
-                    reddit_worksheet.clear()
-                    
-                    # Prepare headers
-                    headers = ['Username', 'Subreddit', 'Post Title', 'Keywords', 'Message', 'Post URL', 'Date Generated']
-                    reddit_worksheet.append_row(headers)
-                    
-                    # Add data rows
-                    now = time.strftime("%Y-%m-%d %H:%M:%S")
-                    for lead in reddit_leads:
-                        row = [
-                            lead.get('username', 'Unknown'),
-                            lead.get('subreddit', ''),
-                            lead.get('post_title', '')[:100] + '...' if len(lead.get('post_title', '')) > 100 else lead.get('post_title', ''),
-                            lead.get('matched_keywords', ''),
-                            lead.get('message', ''),
-                            lead.get('post_url', ''),
-                            now
-                        ]
-                        reddit_worksheet.append_row(row)
-                    
-                    logger.info(f"Updated Google Sheets with {len(reddit_leads)} Reddit messages")
-                except Exception as e:
-                    logger.error(f"Error updating Reddit worksheet: {str(e)}")
-            
+            # Save to CSV
+            df.to_csv(filename, index=False)
+            logger.info(f"Successfully saved {len(leads)} leads with messages to {filename}")
             return True
+            
         except Exception as e:
-            logger.error(f"Error updating Google Sheets: {str(e)}")
+            logger.error(f"Error saving leads with messages to CSV: {str(e)}")
             return False
 
-
-def run_message_generator(sheets_client=None, 
-                         max_linkedin_leads: int = 10, 
-                         max_reddit_leads: int = 10,
-                         model: str = "gpt-4") -> Dict[str, Any]:
+# Function to be imported and used by main.py
+def run_message_generator(sheets_client=None, max_linkedin_leads=10, max_reddit_leads=10, model="gpt-4"):
     """
-    Run the message generator as a standalone function.
+    Runs the message generator for LinkedIn and Reddit leads.
     
     Args:
         sheets_client: Google Sheets client for saving results
         max_linkedin_leads: Maximum number of LinkedIn leads to process
         max_reddit_leads: Maximum number of Reddit leads to process
-        model: OpenAI model to use for generation
+        model: OpenAI model to use ("gpt-4" or "gpt-3.5-turbo")
         
     Returns:
-        Dictionary containing process results
+        Dict with results of message generation
     """
-    results = {
-        "linkedin_leads_processed": 0,
-        "reddit_leads_processed": 0,
-        "messages_generated": 0
-    }
-    
     try:
-        # Create the message generator
-        generator = MessageGenerator(model=model)
+        logger.info(f"Starting message generation with model {model}")
+        results = {
+            "linkedin_leads_processed": 0,
+            "reddit_leads_processed": 0,
+            "total_messages_generated": 0
+        }
         
-        # Load LinkedIn leads
-        linkedin_leads = []
+        # Create message generator
+        message_gen = MessageGenerator(model=model)
+        
+        # Process LinkedIn leads if available
         try:
-            if os.path.exists('data/linkedin_leads.csv'):
-                linkedin_df = pd.read_csv('data/linkedin_leads.csv')
+            linkedin_file = "data/linkedin_leads.csv"
+            if os.path.exists(linkedin_file):
+                # Load LinkedIn leads
+                linkedin_df = pd.read_csv(linkedin_file)
                 linkedin_leads = linkedin_df.to_dict('records')
-                logger.info(f"Loaded {len(linkedin_leads)} LinkedIn leads from CSV")
+                
+                # Process leads
+                processed_linkedin = message_gen.process_linkedin_leads(
+                    linkedin_leads, 
+                    max_leads=max_linkedin_leads
+                )
+                
+                # Save results
+                message_gen.save_messages_to_csv(
+                    processed_linkedin, 
+                    "data/output/linkedin_messages.csv"
+                )
+                
+                # Update results
+                results["linkedin_leads_processed"] = len(processed_linkedin)
+                successful_linkedin = sum(1 for lead in processed_linkedin 
+                                        if lead.get('message_status') == 'generated')
+                results["linkedin_messages_generated"] = successful_linkedin
+                
+                logger.info(f"Processed {len(processed_linkedin)} LinkedIn leads")
+                
+                # Save to Google Sheets if provided
+                if sheets_client:
+                    try:
+                        worksheet = sheets_client.open('LeadGenerationData').worksheet('LinkedInMessages')
+                        
+                        # Prepare data for sheets
+                        for lead in processed_linkedin:
+                            if lead.get('message_status') == 'generated':
+                                row = [
+                                    lead.get('name', ''),
+                                    lead.get('headline', ''),
+                                    lead.get('location', ''),
+                                    lead.get('profile_url', ''),
+                                    lead.get('generated_message', ''),
+                                    lead.get('message_generated_at', ''),
+                                    lead.get('coaching_fit_score', 0)
+                                ]
+                                worksheet.append_row(row)
+                        
+                        logger.info(f"Saved {successful_linkedin} LinkedIn messages to Google Sheets")
+                    except Exception as e:
+                        logger.error(f"Error saving LinkedIn messages to Google Sheets: {str(e)}")
+            else:
+                logger.warning(f"LinkedIn leads file not found: {linkedin_file}")
         except Exception as e:
-            logger.error(f"Error loading LinkedIn leads: {str(e)}")
+            logger.error(f"Error processing LinkedIn leads: {str(e)}")
         
-        # Load Reddit leads
-        reddit_leads = []
+        # Process Reddit leads if available
         try:
-            if os.path.exists('data/reddit_leads.csv'):
-                reddit_df = pd.read_csv('data/reddit_leads.csv')
+            reddit_file = "data/reddit_leads.csv"
+            if os.path.exists(reddit_file):
+                # Load Reddit leads
+                reddit_df = pd.read_csv(reddit_file)
                 reddit_leads = reddit_df.to_dict('records')
-                logger.info(f"Loaded {len(reddit_leads)} Reddit leads from CSV")
+                
+                # Process leads
+                processed_reddit = message_gen.process_reddit_leads(
+                    reddit_leads, 
+                    max_leads=max_reddit_leads
+                )
+                
+                # Save results
+                message_gen.save_messages_to_csv(
+                    processed_reddit, 
+                    "data/output/reddit_messages.csv"
+                )
+                
+                # Update results
+                results["reddit_leads_processed"] = len(processed_reddit)
+                successful_reddit = sum(1 for lead in processed_reddit 
+                                    if lead.get('message_status') == 'generated')
+                results["reddit_messages_generated"] = successful_reddit
+                
+                logger.info(f"Processed {len(processed_reddit)} Reddit leads")
+                
+                # Save to Google Sheets if provided
+                if sheets_client:
+                    try:
+                        worksheet = sheets_client.open('LeadGenerationData').worksheet('RedditMessages')
+                        
+                        # Prepare data for sheets
+                        for lead in processed_reddit:
+                            if lead.get('message_status') == 'generated':
+                                row = [
+                                    lead.get('username', ''),
+                                    lead.get('post_title', ''),
+                                    lead.get('subreddit', ''),
+                                    lead.get('post_url', ''),
+                                    lead.get('generated_message', ''),
+                                    lead.get('message_generated_at', ''),
+                                    lead.get('matched_keywords', '')
+                                ]
+                                worksheet.append_row(row)
+                        
+                        logger.info(f"Saved {successful_reddit} Reddit messages to Google Sheets")
+                    except Exception as e:
+                        logger.error(f"Error saving Reddit messages to Google Sheets: {str(e)}")
+            else:
+                logger.warning(f"Reddit leads file not found: {reddit_file}")
         except Exception as e:
-            logger.error(f"Error loading Reddit leads: {str(e)}")
-        
-        # Generate messages for LinkedIn leads
-        linkedin_with_messages = []
-        if linkedin_leads:
-            linkedin_with_messages = generator.generate_linkedin_messages(
-                linkedin_leads, 
-                max_leads=max_linkedin_leads
-            )
-            results["linkedin_leads_processed"] = len(linkedin_with_messages)
-        
-        # Generate messages for Reddit leads
-        reddit_with_messages = []
-        if reddit_leads:
-            reddit_with_messages = generator.generate_reddit_messages(
-                reddit_leads,
-                max_leads=max_reddit_leads
-            )
-            results["reddit_leads_processed"] = len(reddit_with_messages)
+            logger.error(f"Error processing Reddit leads: {str(e)}")
         
         # Calculate total messages generated
-        results["messages_generated"] = results["linkedin_leads_processed"] + results["reddit_leads_processed"]
+        results["total_messages_generated"] = results.get("linkedin_messages_generated", 0) + results.get("reddit_messages_generated", 0)
         
-        # Save messages to CSV
-        generator.save_messages_to_csv(linkedin_with_messages, reddit_with_messages)
-        
-        # Update Google Sheets if client provided
-        if sheets_client:
-            generator.update_sheets(sheets_client, linkedin_with_messages, reddit_with_messages)
-        
-        logger.info(f"Message generation completed. Generated {results['messages_generated']} messages.")
+        logger.info(f"Message generation completed: {results['total_messages_generated']} messages generated")
         return results
-    
+        
     except Exception as e:
         logger.error(f"Error running message generator: {str(e)}")
-        results["error"] = str(e)
-        return results
+        return {
+            "linkedin_leads_processed": 0,
+            "reddit_leads_processed": 0,
+            "total_messages_generated": 0,
+            "error": str(e)
+        }
 
-
+# For testing
 if __name__ == "__main__":
-    # This allows the script to be run directly for testing
-    from utils.sheets_manager import get_sheets_client
-    
-    # Get Google Sheets client
-    try:
-        sheets_client = get_sheets_client()
-    except Exception as e:
-        logger.error(f"Could not connect to Google Sheets: {str(e)}")
-        sheets_client = None
-    
-    # Run the message generator
-    results = run_message_generator(
-        sheets_client=sheets_client,
-        max_linkedin_leads=5,
-        max_reddit_leads=5,
-        model="gpt-4"
-    )
-    
-    print(f"Generated {results['messages_generated']} messages")
+    results = run_message_generator(max_linkedin_leads=5, max_reddit_leads=5)
+    print(f"Generated {results['total_messages_generated']} messages:")
+    print(f"- LinkedIn: {results.get('linkedin_messages_generated', 0)}")
+    print(f"- Reddit: {results.get('reddit_messages_generated', 0)}")
