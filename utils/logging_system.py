@@ -4,7 +4,7 @@ import json
 import time
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Union, List, Tuple
 from functools import wraps
 
@@ -59,6 +59,7 @@ class LogManager:
         self.logger = logging.getLogger(module_name)
         self.start_time = None
         self.metrics = {}
+        self.operation_name = "unknown"
         
     def start_operation(self, operation_name: str) -> None:
         """
@@ -176,7 +177,7 @@ class LogManager:
         # Add context details
         context = {
             "module": self.module_name,
-            "operation": getattr(self, "operation_name", "unknown"),
+            "operation": self.operation_name,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
@@ -372,7 +373,7 @@ class MetricsTracker:
         Returns:
             List of error entries
         """
-        cutoff_date = (datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+        cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         errors = []
         
         try:
@@ -461,7 +462,7 @@ class MetricsTracker:
         daily_metrics = []
         
         for i in range(days):
-            date = (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+            date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
             metrics = MetricsTracker.get_daily_metrics(date)
             daily_metrics.append(metrics)
             
