@@ -4,7 +4,6 @@ import time
 import random
 import requests
 import zipfile
-import win32api
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -19,11 +18,6 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Ensure logs directory exists
-os.makedirs('logs', exist_ok=True)
-os.makedirs('debug', exist_ok=True)  # Create a debug directory
-os.makedirs('data', exist_ok=True)   # Create a data directory for results
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -32,9 +26,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger('linkedin_scraper')
 
-CHROMEDRIVER_DIR = "D:/lead_gen_tool/"
-CHROMEDRIVER_PATH = os.path.join(CHROMEDRIVER_DIR, "chromedriver.exe")
-FORCE_CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+# Get ChromeDriver path from environment variable or use default paths
+def get_chromedriver_path():
+    """Get the ChromeDriver path from environment variables or use sensible defaults."""
+    env_path = os.getenv('CHROMEDRIVER_PATH')
+    if env_path and os.path.exists(env_path):
+        return env_path
+        
+    # Try to find ChromeDriver in common locations
+    possible_paths = [
+        # Current directory
+        os.path.join(os.getcwd(), "chromedriver.exe"),
+        os.path.join(os.getcwd(), "chromedriver"),
+        
+        # Tool directory
+        os.path.join(os.getcwd(), "tools", "chromedriver.exe"),
+        os.path.join(os.getcwd(), "tools", "chromedriver"),
+        
+        # Drivers directory
+        os.path.join(os.getcwd(), "drivers", "chromedriver.exe"),
+        os.path.join(os.getcwd(), "drivers", "chromedriver"),
+        
+        # Old hard-coded path as fallback
+        os.path.join("D:/lead_gen_tool/", "chromedriver.exe"),
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            logger.info(f"Found ChromeDriver at: {path}")
+            return path
+            
+    # Return the first path as default - this will fail if the file doesn't exist
+    # but at least the error will be clear about where it was looking
+    return possible_paths[0]
+
+CHROMEDRIVER_PATH = get_chromedriver_path()
 
 # Define target audiences for life coaching
 TARGET_INDUSTRIES = [
