@@ -2,12 +2,10 @@ import os
 import re
 import logging
 import pandas as pd
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
 import json
 import time
-import openai
+from typing import List, Dict, Any, Optional
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +38,9 @@ class LeadScorer:
         self.threshold = threshold
         self.use_ai = use_ai
         self.model = model
+        self.api_key = None
+        self.client = None
+        self.client_version = None
         
         if use_ai:
             self.api_key = os.getenv("OPENAI_API_KEY")
@@ -47,7 +48,21 @@ class LeadScorer:
                 logger.error("Missing OpenAI API key in .env file. AI scoring will be disabled.")
                 self.use_ai = False
             else:
-                openai.api_key = self.api_key
+                # Initialize OpenAI client - compatible with both v1.x and earlier versions
+                try:
+                    # First, try the newer OpenAI client (v1.x+)
+                    from openai import OpenAI
+                    self.client = OpenAI(api_key=self.api_key)
+                    self.client_version = "v1"
+                    logger.info("Using OpenAI API v1.x client")
+                except (ImportError, AttributeError):
+                    # Fall back to the older API
+                    import openai
+                    openai.api_key = self.api_key
+                    self.client = openai
+                    self.client_version = "legacy"
+                    logger.info("Using OpenAI API legacy client")
+                
                 logger.info(f"AI scoring enabled with model: {model}")
         
         logger.info(f"Lead scorer initialized with threshold: {threshold}, AI: {use_ai}")
@@ -103,19 +118,31 @@ class LeadScorer:
             # Create a prompt for the AI
             prompt = self._create_scoring_prompt(lead)
             
-            # Call OpenAI API
-            response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an expert lead qualification system. Your job is to analyze lead data and provide a qualification score from 0.0 to 1.0, where 1.0 is the highest quality lead."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=300
-            )
-            
-            # Extract the score from the response
-            content = response["choices"][0]["message"]["content"].strip()
+            # Call OpenAI API using the appropriate client version
+            if self.client_version == "v1":
+                # New client API style
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert lead qualification system. Your job is to analyze lead data and provide a qualification score from 0.0 to 1.0, where 1.0 is the highest quality lead."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=300
+                )
+                content = response.choices[0].message.content.strip()
+            else:
+                # Legacy API style
+                response = self.client.ChatCompletion.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert lead qualification system. Your job is to analyze lead data and provide a qualification score from 0.0 to 1.0, where 1.0 is the highest quality lead."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=300
+                )
+                content = response["choices"][0]["message"]["content"].strip()
             
             # Try to find a float value in the content (score between 0 and 1)
             score_match = re.search(r'score: ([0-9.]+)', content.lower())
