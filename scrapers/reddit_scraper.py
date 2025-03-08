@@ -329,9 +329,6 @@ class RedditScraper:
                 logger.warning("No leads to save to CSV")
                 return False
                 
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else ".", exist_ok=True)
-            
             # Convert to DataFrame
             df = pd.DataFrame(leads)
             
@@ -391,7 +388,7 @@ def run_reddit_scraper(sheets_client=None,
                       time_filter: str = "month",
                       post_limit: int = 100,
                       save_csv: bool = True,
-                      max_leads: int = None) -> List[Dict[str, Any]]:
+                      max_leads: int = 50) -> List[Dict[str, Any]]:
     """
     Run the Reddit scraper as a standalone function.
     
@@ -402,15 +399,11 @@ def run_reddit_scraper(sheets_client=None,
         time_filter: Time filter for posts
         post_limit: Maximum posts per subreddit
         save_csv: Whether to save results to a CSV file
-        max_leads: Maximum number of leads to collect (if specified, overrides post_limit)
+        max_leads: Maximum number of leads to return (primarily for processing limits)
         
     Returns:
         List of leads collected
     """
-    # Use max_leads to override post_limit if specified
-    if max_leads is not None:
-        post_limit = max_leads
-        
     # Create the scraper with provided or default parameters
     scraper = RedditScraper(
         subreddits=subreddits,
@@ -419,11 +412,21 @@ def run_reddit_scraper(sheets_client=None,
         post_limit=post_limit
     )
     
+    # Set data directory
+    os.makedirs('data', exist_ok=True)
+    csv_filename = "data/reddit_leads.csv"
+    
     # Run the scraper
     leads = scraper.run_full_scrape(
         sheets_client=sheets_client,
-        save_csv=save_csv
+        save_csv=save_csv,
+        csv_filename=csv_filename
     )
+    
+    # Limit the number of leads if specified
+    if max_leads and len(leads) > max_leads:
+        logger.info(f"Limiting result to {max_leads} leads (from {len(leads)} total)")
+        return leads[:max_leads]
     
     return leads
 
