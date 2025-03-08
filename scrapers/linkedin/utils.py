@@ -12,33 +12,50 @@ from selenium.webdriver.chrome.options import Options
 # Configure logging
 logger = logging.getLogger('linkedin.utils')
 
-# Define fixed path for ChromeDriver
-CHROMEDRIVER_PATH = "D:/lead_gen_tool/chromedriver.exe"
-
-# Alternate paths to check if the primary path doesn't exist
-ALTERNATE_PATHS = [
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "drivers", "chromedriver.exe"),
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "chromedriver.exe"),
-    "chromedriver.exe",  # Check in current working directory
-    os.path.join(os.getcwd(), "chromedriver.exe")
-]
-
 def find_chromedriver():
     """Find the ChromeDriver executable path."""
-    if os.path.exists(CHROMEDRIVER_PATH):
-        logger.info(f"Found ChromeDriver at fixed path: {CHROMEDRIVER_PATH}")
-        return CHROMEDRIVER_PATH
-    
-    # Check alternate paths
-    for path in ALTERNATE_PATHS:
+    # Define possible paths based on operating system
+    if platform.system() == "Windows":
+        possible_paths = [
+            "chromedriver.exe",
+            os.path.join(os.getcwd(), "chromedriver.exe"),
+            os.path.join(os.getcwd(), "drivers", "chromedriver.exe"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "drivers", "chromedriver.exe"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "chromedriver.exe"),
+        ]
+    elif platform.system() == "Darwin":  # macOS
+        possible_paths = [
+            "chromedriver",
+            os.path.join(os.getcwd(), "chromedriver"),
+            os.path.join(os.getcwd(), "drivers", "chromedriver"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "drivers", "chromedriver"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "chromedriver"),
+        ]
+    else:  # Linux
+        possible_paths = [
+            "chromedriver",
+            os.path.join(os.getcwd(), "chromedriver"),
+            os.path.join(os.getcwd(), "drivers", "chromedriver"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "drivers", "chromedriver"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "chromedriver"),
+            "/usr/local/bin/chromedriver",
+            "/usr/bin/chromedriver",
+        ]
+
+    # Check if any of the possible paths exist
+    for path in possible_paths:
         if os.path.exists(path):
-            logger.info(f"Found ChromeDriver at alternate path: {path}")
-            return path
+            logger.info(f"Found ChromeDriver at: {path}")
+            # Check if the file is executable
+            if os.access(path, os.X_OK) or platform.system() == "Windows":
+                return path
+            else:
+                logger.warning(f"ChromeDriver found at {path} but is not executable")
     
     # If we get here, no ChromeDriver was found
     logger.error("ChromeDriver not found in any expected location.")
-    logger.error(f"Tried: {CHROMEDRIVER_PATH} and {ALTERNATE_PATHS}")
-    raise FileNotFoundError("ChromeDriver not found. Please ensure it is in one of the expected locations.")
+    logger.error(f"Tried: {possible_paths}")
+    raise FileNotFoundError("ChromeDriver not found. Please ensure it is in one of the expected locations and is executable.")
 
 def get_random_user_agent():
     """Return a random user agent string to avoid detection."""
