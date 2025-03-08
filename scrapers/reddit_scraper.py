@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='reddit_scraper.log'
+    filename='logs/reddit_scraper.log'
 )
 logger = logging.getLogger('reddit_scraper')
 
@@ -329,6 +329,9 @@ class RedditScraper:
                 logger.warning("No leads to save to CSV")
                 return False
                 
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(filename) if os.path.dirname(filename) else ".", exist_ok=True)
+            
             # Convert to DataFrame
             df = pd.DataFrame(leads)
             
@@ -387,7 +390,8 @@ def run_reddit_scraper(sheets_client=None,
                       keywords: Optional[List[str]] = None,
                       time_filter: str = "month",
                       post_limit: int = 100,
-                      save_csv: bool = True) -> List[Dict[str, Any]]:
+                      save_csv: bool = True,
+                      max_leads: int = None) -> List[Dict[str, Any]]:
     """
     Run the Reddit scraper as a standalone function.
     
@@ -398,10 +402,15 @@ def run_reddit_scraper(sheets_client=None,
         time_filter: Time filter for posts
         post_limit: Maximum posts per subreddit
         save_csv: Whether to save results to a CSV file
+        max_leads: Maximum number of leads to collect (if specified, overrides post_limit)
         
     Returns:
         List of leads collected
     """
+    # Use max_leads to override post_limit if specified
+    if max_leads is not None:
+        post_limit = max_leads
+        
     # Create the scraper with provided or default parameters
     scraper = RedditScraper(
         subreddits=subreddits,
