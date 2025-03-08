@@ -340,42 +340,424 @@ class LinkedInScraper:
         return profile_data
 
     # Enhanced JavaScript profile extraction method
-    def extract_profiles_js(self, driver):
-        """
-        Extract profile information using JavaScript for better reliability.
-        Handles null/undefined values and uses current LinkedIn HTML structure.
-        """
-        js_script = """
+def extract_profiles_js(self, driver):
+    """
+    Updated JavaScript method to extract profile information using current LinkedIn HTML structure.
+    Handles multiple possible DOM variations.
+    """
+    js_script = """
+    function extractProfiles() {
         var profiles = []; 
-        document.querySelectorAll('.reusable-search__result-container').forEach(function(profile) { 
-            var nameElement = profile.querySelector('.entity-result__title-text span[aria-hidden="true"]'); 
-            var linkElement = profile.querySelector('.app-aware-link[href*="/in/"]'); 
-            var headlineElement = profile.querySelector('.entity-result__primary-subtitle'); 
-            var locationElement = profile.querySelector('.entity-result__secondary-subtitle'); 
-            
-            if (linkElement) { 
-                profiles.push({ 
-                    url: linkElement.href.trim(), 
-                    name: nameElement ? nameElement.innerText.trim() : "Unknown", 
-                    headline: headlineElement ? headlineElement.innerText.trim() : "No headline", 
-                    location: locationElement ? locationElement.innerText.trim() : "Unknown location" 
-                }); 
-            } 
-        }); 
-        return profiles;
-        """
         
-        try:
-            profiles_data = driver.execute_script(js_script)
-            if not profiles_data:
-                logger.warning("No profiles found on the page using JavaScript extraction")
-                return []
-                
-            logger.info(f"Successfully extracted {len(profiles_data)} profiles via JavaScript")
-            return profiles_data
-        except Exception as e:
-            logger.error(f"JavaScript extraction failed: {str(e)}")
+        // Try multiple selectors to find profile containers
+        var containers = [];
+        
+        // Method 1: Standard search results container
+        var standardContainers = document.querySelectorAll('.reusable-search__result-container');
+        if (standardContainers && standardContainers.length > 0) {
+            containers = standardContainers;
+        } 
+        // Method 2: Ember view items (alternative structure)
+        else {
+            var emberItems = document.querySelectorAll('li.ember-view');
+            if (emberItems && emberItems.length > 0) {
+                containers = emberItems;
+            }
+        }
+        
+        // Process each container to extract profile information
+        containers.forEach(function(container) {
+            // Find profile link - try multiple selectors
+            var profileLink = null;
+            var linkSelectors = [
+                '.app-aware-link[href*="/in/"]', 
+                'a[href*="/in/"]',
+                '.entity-result__title-text a',
+                'a[data-control-name="search_srp_result"]'
+            ];
+            
+            for (var i = 0; i < linkSelectors.length; i++) {
+                var links = container.querySelectorAll(linkSelectors[i]);
+                if (links && links.length > 0) {
+                    profileLink = links[0].href;
+                    break;
+                }
+            }
+            
+            if (!profileLink) return; // Skip if no profile link found
+            
+            // Extract name - try multiple selectors
+            var name = "Unknown";
+            var nameSelectors = [
+                '.entity-result__title-text span[aria-hidden="true"]',
+                '.entity-result__title-line a span span',
+                '.actor-name',
+                'span.name',
+                'span[dir="ltr"]',
+                '.artdeco-entity-lockup__title span'
+            ];
+            
+            for (var j = 0; j < nameSelectors.length; j++) {
+                var nameElements = container.querySelectorAll(nameSelectors[j]);
+                if (nameElements && nameElements.length > 0 && nameElements[0].innerText) {
+                    name = nameElements[0].innerText.trim();
+                    break;
+                }
+            }
+            
+            // Extract headline - try multiple selectors
+            var headline = "No headline";
+            var headlineSelectors = [
+                '.entity-result__primary-subtitle',
+                '.search-result__info .subline-level-1',
+                '.entity-result__summary span',
+                '.artdeco-entity-lockup__subtitle',
+                'p.subline-level-1',
+                '.member-insights__title'
+            ];
+            
+            for (var k = 0; k < headlineSelectors.length; k++) {
+                var headlineElements = container.querySelectorAll(headlineSelectors[k]);
+                if (headlineElements && headlineElements.length > 0 && headlineElements[0].innerText) {
+                    headline = headlineElements[0].innerText.trim();
+                    break;
+                }
+            }
+            
+            // Extract location - try multiple selectors
+            var location = "Unknown location";
+            var locationSelectors = [
+                '.entity-result__secondary-subtitle',
+                '.search-result__info .subline-level-2',
+                '.artdeco-entity-lockup__caption',
+                'p.subline-level-2',
+                '.member-insights__location'
+            ];
+            
+            for (var l = 0; l < locationSelectors.length; l++) {
+                var locationElements = container.querySelectorAll(locationSelectors[l]);
+                if (locationElements && locationElements.length > 0 && locationElements[0].innerText) {
+                    location = locationElements[0].innerText.trim();
+                    break;
+                }
+            }
+            
+            // Add extracted profile to list
+            profiles.push({
+                url: profileLink,
+                name: name,
+                headline: headline,
+                location: location
+            });
+        });
+        
+        // Fallback: Search for any profile links on the page if no profiles found
+        if (profiles.length === 0) {
+            var allLinks = document.querySelectorAll('a[href*="/in/"]');
+            allLinks.forEach(function(link) {
+                if (link.href.includes('/in/')) {
+                    var name = link.innerText.trim() || "Unknown";
+                    if (name.length > 1) {
+                        profiles.push({
+                            url: link.href,
+                            name: name,
+                            headline: "Not available",
+                            location: "Not available"
+                        });
+                    }
+                }
+            });
+        }
+        
+        return profiles;
+    }
+    
+    return extractProfiles();
+    """
+    
+    try:
+        profiles_data = driver.execute_script(js_script)
+        if not profiles_data:
+            logger.warning("No profiles found on the page using JavaScript extraction")
             return []
+            
+        logger.info(f"Successfully extracted {len(profiles_data)} profiles via JavaScript")
+        return profiles_data
+    except Exception as e:
+        logger.error(f"JavaScript extraction failed: {str(e)}")
+        return []
+        
+def extract_profiles_selenium(self, driver):
+    """
+    Updated Selenium method to extract profile information.
+    Tries multiple selector patterns to adapt to LinkedIn's changing structure.
+    """
+    profiles = []
+    
+    # Try multiple selectors for finding profile containers
+    container_selectors = [
+        '.reusable-search__result-container',
+        'li.ember-view',
+        '.entity-result',
+        '.search-results__list > li',
+        'ul.reusable-search__entity-result-list > li',
+        '[data-chameleon-result-urn]',
+        '.artdeco-list__item'
+    ]
+    
+    # Try to find profile containers using different selectors
+    found_containers = False
+    for selector in container_selectors:
+        try:
+            containers = driver.find_elements(By.CSS_SELECTOR, selector)
+            if containers and len(containers) > 0:
+                logger.info(f"Found {len(containers)} profile containers using selector: {selector}")
+                found_containers = True
+                
+                for container in containers:
+                    try:
+                        profile_data = {}
+                        
+                        # Try to find profile link
+                        try:
+                            link_element = container.find_element(By.CSS_SELECTOR, 'a[href*="/in/"]')
+                            profile_data['url'] = link_element.get_attribute('href')
+                        except NoSuchElementException:
+                            # Skip if no profile link found
+                            continue
+                        
+                        # Try to find name with multiple selectors
+                        name_selectors = [
+                            '.entity-result__title-text span[aria-hidden="true"]',
+                            '.entity-result__title-line a span span',
+                            'span.name',
+                            'span[dir="ltr"]',
+                            '.artdeco-entity-lockup__title span'
+                        ]
+                        
+                        for name_selector in name_selectors:
+                            try:
+                                name_element = container.find_element(By.CSS_SELECTOR, name_selector)
+                                profile_data['name'] = name_element.text.strip()
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if 'name' not in profile_data:
+                            profile_data['name'] = "Unknown"
+                        
+                        # Try to find headline with multiple selectors
+                        headline_selectors = [
+                            '.entity-result__primary-subtitle',
+                            '.search-result__info .subline-level-1',
+                            '.artdeco-entity-lockup__subtitle',
+                            'p.subline-level-1'
+                        ]
+                        
+                        for headline_selector in headline_selectors:
+                            try:
+                                headline_element = container.find_element(By.CSS_SELECTOR, headline_selector)
+                                profile_data['headline'] = headline_element.text.strip()
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if 'headline' not in profile_data:
+                            profile_data['headline'] = "No headline"
+                        
+                        # Try to find location with multiple selectors
+                        location_selectors = [
+                            '.entity-result__secondary-subtitle',
+                            '.search-result__info .subline-level-2',
+                            '.artdeco-entity-lockup__caption',
+                            'p.subline-level-2'
+                        ]
+                        
+                        for location_selector in location_selectors:
+                            try:
+                                location_element = container.find_element(By.CSS_SELECTOR, location_selector)
+                                profile_data['location'] = location_element.text.strip()
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if 'location' not in profile_data:
+                            profile_data['location'] = "Unknown location"
+                        
+                        # Add profile to results if it has at least a URL
+                        if 'url' in profile_data:
+                            profiles.append(profile_data)
+                    
+                    except Exception as e:
+                        logger.warning(f"Error extracting profile data: {str(e)}")
+                        continue
+                
+                break  # Exit the selector loop if containers were found
+            
+        except Exception as e:
+            logger.debug(f"Error with selector {selector}: {str(e)}")
+    
+    if not found_containers:
+        # Fallback: Try to find any profile links directly
+        try:
+            all_links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/in/"]')
+            logger.info(f"Fallback: Found {len(all_links)} profile links directly")
+            
+            for link in all_links:
+                try:
+                    url = link.get_attribute('href')
+                    if '/in/' in url:
+                        text = link.text.strip()
+                        if text and len(text) > 1:
+                            profiles.append({
+                                'url': url,
+                                'name': text,
+                                'headline': "Not available",
+                                'location': "Not available"
+                            })
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning(f"Fallback extraction failed: {str(e)}")
+    
+    logger.info(f"Successfully extracted {len(profiles)} profiles via Selenium")
+    return profiles
+        
+def extract_profiles_selenium(self, driver):
+    """
+    Updated Selenium method to extract profile information.
+    Tries multiple selector patterns to adapt to LinkedIn's changing structure.
+    """
+    profiles = []
+    
+    # Try multiple selectors for finding profile containers
+    container_selectors = [
+        '.reusable-search__result-container',
+        'li.ember-view',
+        '.entity-result',
+        '.search-results__list > li',
+        'ul.reusable-search__entity-result-list > li',
+        '[data-chameleon-result-urn]',
+        '.artdeco-list__item'
+    ]
+    
+    # Try to find profile containers using different selectors
+    found_containers = False
+    for selector in container_selectors:
+        try:
+            containers = driver.find_elements(By.CSS_SELECTOR, selector)
+            if containers and len(containers) > 0:
+                logger.info(f"Found {len(containers)} profile containers using selector: {selector}")
+                found_containers = True
+                
+                for container in containers:
+                    try:
+                        profile_data = {}
+                        
+                        # Try to find profile link
+                        try:
+                            link_element = container.find_element(By.CSS_SELECTOR, 'a[href*="/in/"]')
+                            profile_data['url'] = link_element.get_attribute('href')
+                        except NoSuchElementException:
+                            # Skip if no profile link found
+                            continue
+                        
+                        # Try to find name with multiple selectors
+                        name_selectors = [
+                            '.entity-result__title-text span[aria-hidden="true"]',
+                            '.entity-result__title-line a span span',
+                            'span.name',
+                            'span[dir="ltr"]',
+                            '.artdeco-entity-lockup__title span'
+                        ]
+                        
+                        for name_selector in name_selectors:
+                            try:
+                                name_element = container.find_element(By.CSS_SELECTOR, name_selector)
+                                profile_data['name'] = name_element.text.strip()
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if 'name' not in profile_data:
+                            profile_data['name'] = "Unknown"
+                        
+                        # Try to find headline with multiple selectors
+                        headline_selectors = [
+                            '.entity-result__primary-subtitle',
+                            '.search-result__info .subline-level-1',
+                            '.artdeco-entity-lockup__subtitle',
+                            'p.subline-level-1'
+                        ]
+                        
+                        for headline_selector in headline_selectors:
+                            try:
+                                headline_element = container.find_element(By.CSS_SELECTOR, headline_selector)
+                                profile_data['headline'] = headline_element.text.strip()
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if 'headline' not in profile_data:
+                            profile_data['headline'] = "No headline"
+                        
+                        # Try to find location with multiple selectors
+                        location_selectors = [
+                            '.entity-result__secondary-subtitle',
+                            '.search-result__info .subline-level-2',
+                            '.artdeco-entity-lockup__caption',
+                            'p.subline-level-2'
+                        ]
+                        
+                        for location_selector in location_selectors:
+                            try:
+                                location_element = container.find_element(By.CSS_SELECTOR, location_selector)
+                                profile_data['location'] = location_element.text.strip()
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if 'location' not in profile_data:
+                            profile_data['location'] = "Unknown location"
+                        
+                        # Add profile to results if it has at least a URL
+                        if 'url' in profile_data:
+                            profiles.append(profile_data)
+                    
+                    except Exception as e:
+                        logger.warning(f"Error extracting profile data: {str(e)}")
+                        continue
+                
+                break  # Exit the selector loop if containers were found
+            
+        except Exception as e:
+            logger.debug(f"Error with selector {selector}: {str(e)}")
+    
+    if not found_containers:
+        # Fallback: Try to find any profile links directly
+        try:
+            all_links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/in/"]')
+            logger.info(f"Fallback: Found {len(all_links)} profile links directly")
+            
+            for link in all_links:
+                try:
+                    url = link.get_attribute('href')
+                    if '/in/' in url:
+                        text = link.text.strip()
+                        if text and len(text) > 1:
+                            profiles.append({
+                                'url': url,
+                                'name': text,
+                                'headline': "Not available",
+                                'location': "Not available"
+                            })
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning(f"Fallback extraction failed: {str(e)}")
+    
+    logger.info(f"Successfully extracted {len(profiles)} profiles via Selenium")
+    return profiles
             
     # Enhanced Selenium profile extraction method
     def extract_profiles_selenium(self, driver):
