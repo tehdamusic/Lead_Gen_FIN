@@ -1,65 +1,10 @@
-def run_linkedin_scraper(sheets_client=None, max_leads=50, headless=False):
-    """
-    Run the LinkedIn scraper as a standalone function.
-    
-    Args:
-        sheets_client: Google Sheets client for saving results (optional)
-        max_leads: Maximum number of leads to collect
-        headless: Whether to run the browser in headless mode
-        
-    Returns:
-        List of leads collected
-    """
-    import random
-    from datetime import datetime
-    
-    try:
-        # Create the scraper
-        scraper = LinkedInScraper(headless=headless)
-        
-        # Run the scraper to find coaching leads
-        leads = scraper.scrape_for_coaching_leads(
-            num_pages=3,
-            target_count=max_leads
-        )
-        
-        # Save to Google Sheets if client provided
-        if sheets_client:
-            try:
-                worksheet = sheets_client.open('LeadGenerationData').worksheet('LinkedInLeads')
-                
-                # Prepare data for sheets
-                rows = []
-                for lead in leads:
-                    row = [
-                        lead.get('name', ''), 
-                        lead.get('headline', ''),
-                        lead.get('location', ''),
-                        lead.get('profile_url', ''),
-                        lead.get('coaching_fit_score', 0),
-                        lead.get('coaching_notes', '')
-                    ]
-                    rows.append(row)
-                
-                # Append to Google Sheet
-                for row in rows:
-                    worksheet.append_row(row)
-                logger.info(f"Successfully saved {len(rows)} LinkedIn leads to Google Sheets")
-            except Exception as e:
-                logger.error(f"Error saving to Google Sheets: {str(e)}")
-        
-        # Close the scraper
-        scraper.close()
-        
-        return leads
-    except Exception as e:
-        logger.error(f"Error running LinkedIn scraper: {str(e)}")
-        return []"""
+"""
 LinkedIn scraper for extracting lead data.
 """
 
 import os
 import time
+import random
 import logging
 import csv
 from selenium import webdriver
@@ -346,3 +291,205 @@ class LinkedInScraper:
                         logger.warning(f"Error processing profile {index}: {str(e)}")
                         continue
                 
+                # Add profiles from this page to the main list
+                profiles.extend(page_profiles)
+                logger.info(f"Extracted {len(page_profiles)} profiles from page {page + 1}")
+                
+                # Check if we've reached the target count
+                if len(profiles) >= num_pages * 10:
+                    logger.info(f"Reached target profile count: {len(profiles)}")
+                    break
+            else:
+                logger.warning(f"No profiles extracted on page {page + 1}")
+            
+            # Try to navigate to next page
+            if page < num_pages - 1:
+                next_page = False
+                for selector in NEXT_BUTTON_SELECTORS:
+                    try:
+                        next_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if next_button.is_enabled():
+                            next_button.click()
+                            time.sleep(random.uniform(3, 5))
+                            next_page = True
+                            break
+                    except NoSuchElementException:
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error clicking next button: {str(e)}")
+                
+                if not next_page:
+                    logger.warning("Could not navigate to next page. Ending scrape.")
+                    break
+        
+        # Save the profiles to CSV
+        filename = "data/linkedin_leads.csv"
+        save_profiles_to_csv(profiles, filename)
+        
+        return profiles
+
+    def scrape_by_industry_and_role(self, industry, role, num_pages=3):
+        """
+        Scrape LinkedIn profiles filtered by industry and role.
+        
+        Args:
+            industry: Industry to filter on
+            role: Role/title to filter on
+            num_pages: Number of pages to scrape
+            
+        Returns:
+            List of profile dictionaries
+        """
+        # Format search query
+        search_query = f"{industry} {role}"
+        search_query_url = search_query.replace(' ', '%20')
+        
+        # Construct search URL
+        search_url = f"https://www.linkedin.com/search/results/people/?keywords={search_query_url}&origin=GLOBAL_SEARCH_HEADER"
+        
+        # Perform the scraping
+        profiles = self.scrape_profiles(search_url, num_pages)
+        
+        # Add search metadata
+        for profile in profiles:
+            profile['search_industry'] = industry
+            profile['search_role'] = role
+        
+        return profiles
+
+    def scrape_for_coaching_leads(self, num_pages=3, target_count=30):
+        """
+        Scrape LinkedIn specifically for coaching prospects.
+        
+        Args:
+            num_pages: Number of pages to scrape per search
+            target_count: Target number of leads to collect
+            
+        Returns:
+            List of lead dictionaries
+        """
+        all_leads = []
+        
+        # Strategy 1: Combine industry and role
+        for industry in TARGET_INDUSTRIES[:3]:  # Limit to top 3 industries
+            for role in TARGET_ROLES[:3]:  # Limit to top 3 roles
+                if len(all_leads) >= target_count:
+                    break
+                    
+                logger.info(f"Searching for {role} in {industry}")
+                try:
+                    leads = self.scrape_by_industry_and_role(industry, role, num_pages=num_pages)
+                    all_leads.extend(leads)
+                    
+                    # Avoid doing too many searches
+                    if len(all_leads) >= target_count:
+                        break
+                        
+                    # Add a delay between searches
+                    random_sleep(5, 10)
+                except Exception as e:
+                    logger.error(f"Error scraping {industry} {role}: {str(e)}")
+                    continue
+        
+        # Strategy 2: Use coaching keywords if we don't have enough leads
+        if len(all_leads) < target_count:
+            for keyword in TARGET_KEYWORDS[:5]:  # Limit to top 5 keywords
+                if len(all_leads) >= target_count:
+                    break
+                    
+                logger.info(f"Searching for keyword: {keyword}")
+                try:
+                    # Construct search URL for keyword
+                    keyword_url = keyword.replace(' ', '%20')
+                    search_url = f"https://www.linkedin.com/search/results/people/?keywords={keyword_url}&origin=GLOBAL_SEARCH_HEADER"
+                    
+                    leads = self.scrape_profiles(search_url, num_pages=num_pages)
+                    all_leads.extend(leads)
+                    
+                    # Add a delay between searches
+                    random_sleep(5, 10)
+                except Exception as e:
+                    logger.error(f"Error scraping keyword {keyword}: {str(e)}")
+                    continue
+        
+        # Remove duplicate profiles based on URL
+        unique_leads = []
+        seen_urls = set()
+        
+        for lead in all_leads:
+            url = lead.get('profile_url', '')
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique_leads.append(lead)
+        
+        logger.info(f"Collected {len(unique_leads)} unique coaching leads")
+        
+        # Save to a separate coaching-specific CSV
+        filename = "data/life_coaching_leads.csv"
+        save_profiles_to_csv(unique_leads, filename)
+        
+        return unique_leads
+
+    def close(self):
+        """Close the WebDriver."""
+        if self.driver:
+            self.driver.quit()
+            logger.info("WebDriver closed.")
+
+
+def run_linkedin_scraper(sheets_client=None, max_leads=50, headless=False):
+    """
+    Run the LinkedIn scraper as a standalone function.
+    
+    Args:
+        sheets_client: Google Sheets client for saving results (optional)
+        max_leads: Maximum number of leads to collect
+        headless: Whether to run the browser in headless mode
+        
+    Returns:
+        List of leads collected
+    """
+    from datetime import datetime
+    
+    try:
+        # Create the scraper
+        scraper = LinkedInScraper(headless=headless)
+        
+        # Run the scraper to find coaching leads
+        leads = scraper.scrape_for_coaching_leads(
+            num_pages=3,
+            target_count=max_leads
+        )
+        
+        # Save to Google Sheets if client provided
+        if sheets_client:
+            try:
+                worksheet = sheets_client.open('LeadGenerationData').worksheet('LinkedInLeads')
+                
+                # Prepare data for sheets
+                rows = []
+                for lead in leads:
+                    row = [
+                        lead.get('name', ''), 
+                        lead.get('headline', ''),
+                        lead.get('location', ''),
+                        lead.get('profile_url', ''),
+                        lead.get('coaching_fit_score', 0),
+                        lead.get('coaching_notes', '')
+                    ]
+                    rows.append(row)
+                
+                # Append to Google Sheet
+                for row in rows:
+                    worksheet.append_row(row)
+                logger.info(f"Successfully saved {len(rows)} LinkedIn leads to Google Sheets")
+            except Exception as e:
+                logger.error(f"Error saving to Google Sheets: {str(e)}")
+        
+        # Close the scraper
+        scraper.close()
+        
+        return leads
+    except Exception as e:
+        logger.error(f"Error running LinkedIn scraper: {str(e)}")
+        return []
