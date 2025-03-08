@@ -15,6 +15,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import WebDriverException, NoSuchElementException, TimeoutException, StaleElementReferenceException
 from dotenv import load_dotenv
+from datetime import datetime
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -69,7 +71,7 @@ TARGET_KEYWORDS = [
     "career transition",
     "professional development",
     "leadership development",
-    "work life balance",
+    "work-life balance",
     "burnout",
     "career growth",
     "personal development",
@@ -120,8 +122,7 @@ class LinkedInScraper:
         except WebDriverException as e:
             logger.error(f"WebDriver failed to start: {str(e)}")
             raise RuntimeError("Failed to start Chrome WebDriver. Ensure Chrome and ChromeDriver are compatible.")
-
-    def _rotate_user_agent(self):
+def _rotate_user_agent(self):
         """Rotate user agent to avoid detection."""
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
@@ -254,8 +255,18 @@ class LinkedInScraper:
                     break
                     
             last_height = new_height
-    
-    def _extract_additional_info(self, profile_data):
+            
+    def _is_logged_in(self):
+        """Check if the user is logged in to LinkedIn."""
+        current_url = self.driver.current_url
+        return "feed" in current_url or "mynetwork" in current_url or "messaging" in current_url
+        
+    def close(self):
+        """Close the browser and clean up resources."""
+        if self.driver:
+            self.driver.quit()
+            logger.info("WebDriver closed.")     
+def _extract_additional_info(self, profile_data):
         """
         Rate the lead based on how good a fit they might be for life coaching.
         This is a very simple model and could be enhanced with more advanced scoring.
@@ -338,7 +349,109 @@ class LinkedInScraper:
         
         return profile_data
 
-    # New enhanced JavaScript profile extraction method
+    def _extract_profile_data(self, container, index):
+        """Extract profile data from a container."""
+        profile_data = {}
+        
+        # Add index for reference
+        profile_data["index"] = index + 1
+        
+        # First, save this specific container HTML to a debug file
+        try:
+            container_html = container.get_attribute("outerHTML")
+            with open(f"debug/profile_container_{index+1}.html", "w", encoding="utf-8") as f:
+                f.write(container_html)
+            logger.debug(f"Saved container HTML to debug/profile_container_{index+1}.html")
+        except Exception as e:
+            logger.debug(f"Could not save container HTML: {str(e)}")
+        
+        # Updated selectors for LinkedIn's current structure
+        try:
+            # Find profile links
+            link_elements = container.find_elements(By.CSS_SELECTOR, "a.app-aware-link")
+            for link in link_elements:
+                href = link.get_attribute("href")
+                if href and "/in/" in href:
+                    profile_data["profile_url"] = href.split("?")[0]
+                    break
+                    
+            # Find name - check for the current LinkedIn structure
+            name_selectors = [
+                ".entity-result__title-text a",
+                ".search-result__info .actor-name",
+                ".app-aware-link span[aria-hidden='true']",
+                ".entity-result__title-line a span span",
+                "span[dir='ltr']",
+                ".artdeco-entity-lockup__title span"
+            ]
+            
+            for selector in name_selectors:
+                try:
+                    name_elements = container.find_elements(By.CSS_SELECTOR, selector)
+                    for element in name_elements:
+                        name_text = element.text.strip()
+                        if name_text and len(name_text) > 2:
+                            profile_data["name"] = name_text
+                            break
+                    if "name" in profile_data:
+                        break
+                except Exception:
+                    continue
+                    
+            # Find headline
+            headline_selectors = [
+                ".entity-result__primary-subtitle",
+                ".search-result__info .subline-level-1",
+                ".entity-result__summary span",
+                ".entity-result__primary-subtitle span",
+                ".artdeco-entity-lockup__subtitle"
+            ]
+            
+            for selector in headline_selectors:
+                try:
+                    headline_elements = container.find_elements(By.CSS_SELECTOR, selector)
+                    for element in headline_elements:
+                        headline_text = element.text.strip()
+                        if headline_text:
+                            profile_data["headline"] = headline_text
+                            break
+                    if "headline" in profile_data:
+                        break
+                except Exception:
+                    continue
+                    
+            # Find location
+            location_selectors = [
+                ".entity-result__secondary-subtitle",
+                ".search-result__info .subline-level-2",
+                ".entity-result__secondary-subtitle span",
+                ".artdeco-entity-lockup__caption"
+            ]
+            for selector in location_selectors:
+                try:
+                    location_elements = container.find_elements(By.CSS_SELECTOR, selector)
+                    for element in location_elements:
+                        location_text = element.text.strip()
+                        if location_text and "," in location_text:
+                            profile_data["location"] = location_text
+                            break
+                    if "location" in profile_data:
+                        break
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"Error extracting profile data: {str(e)}")
+        
+        # If we found any meaningful data, return it
+        if "profile_url" in profile_data or "name" in profile_data:
+            found_fields = [k for k in profile_data.keys() if k != "index"]
+            logger.info(f"Profile {index+1}: Found {', '.join(found_fields)}")
+            return profile_data
+        else:
+            logger.warning(f"Profile {index+1}: Could not extract any data")
+            return profile_data    
+# New enhanced JavaScript profile extraction method
     def extract_profiles_js(self, driver):
         """
         Extract profile information using JavaScript for better reliability.
@@ -454,9 +567,8 @@ class LinkedInScraper:
         else:
             logger.warning("No profiles extracted using either method")
         
-        return profiles
-
-    # This is the method used by your GUI - it takes a search_url directly
+        return profiles   
+# This is the method used by your GUI - it takes a search_url directly
     def scrape_profiles(self, search_url, num_pages=3):
         """
         Scrapes LinkedIn profiles from a given search URL.
@@ -703,9 +815,8 @@ class LinkedInScraper:
         # Save to CSV for backup
         self._save_profiles_to_csv(unique_profiles, "data/linkedin_leads.csv")
         
-        return unique_profiles
-
-    def _save_profiles_to_csv(self, profiles, filename):
+        return unique_profiles     
+def _save_profiles_to_csv(self, profiles, filename):
         """Save profiles to CSV file."""
         import csv
         
@@ -729,120 +840,6 @@ class LinkedInScraper:
         except Exception as e:
             logger.error(f"Error saving profiles to CSV: {str(e)}")
 
-    def _is_logged_in(self):
-        """Check if the user is logged in to LinkedIn."""
-        current_url = self.driver.current_url
-        return "feed" in current_url or "mynetwork" in current_url or "messaging" in current_url
-        
-    def _extract_profile_data(self, container, index):
-        """Extract profile data from a container."""
-        profile_data = {}
-        
-        # Add index for reference
-        profile_data["index"] = index + 1
-        
-        # First, save this specific container HTML to a debug file
-        try:
-            container_html = container.get_attribute("outerHTML")
-            with open(f"debug/profile_container_{index+1}.html", "w", encoding="utf-8") as f:
-                f.write(container_html)
-            logger.debug(f"Saved container HTML to debug/profile_container_{index+1}.html")
-        except Exception as e:
-            logger.debug(f"Could not save container HTML: {str(e)}")
-        
-        # Updated selectors for LinkedIn's current structure
-        try:
-            # Find profile links
-            link_elements = container.find_elements(By.CSS_SELECTOR, "a.app-aware-link")
-            for link in link_elements:
-                href = link.get_attribute("href")
-                if href and "/in/" in href:
-                    profile_data["profile_url"] = href.split("?")[0]
-                    break
-                    
-            # Find name - check for the current LinkedIn structure
-            name_selectors = [
-                ".entity-result__title-text a",
-                ".search-result__info .actor-name",
-                ".app-aware-link span[aria-hidden='true']",
-                ".entity-result__title-line a span span",
-                "span[dir='ltr']",
-                ".artdeco-entity-lockup__title span"
-            ]
-            
-            for selector in name_selectors:
-                try:
-                    name_elements = container.find_elements(By.CSS_SELECTOR, selector)
-                    for element in name_elements:
-                        name_text = element.text.strip()
-                        if name_text and len(name_text) > 2:
-                            profile_data["name"] = name_text
-                            break
-                    if "name" in profile_data:
-                        break
-                except Exception:
-                    continue
-                    
-            # Find headline
-            headline_selectors = [
-                ".entity-result__primary-subtitle",
-                ".search-result__info .subline-level-1",
-                ".entity-result__summary span",
-                ".entity-result__primary-subtitle span",
-                ".artdeco-entity-lockup__subtitle"
-            ]
-            
-            for selector in headline_selectors:
-                try:
-                    headline_elements = container.find_elements(By.CSS_SELECTOR, selector)
-                    for element in headline_elements:
-                        headline_text = element.text.strip()
-                        if headline_text:
-                            profile_data["headline"] = headline_text
-                            break
-                    if "headline" in profile_data:
-                        break
-                except Exception:
-                    continue
-                    
-            # Find location
-            location_selectors = [
-                ".entity-result__secondary-subtitle",
-                ".search-result__info .subline-level-2",
-                ".entity-result__secondary-subtitle span",
-                ".artdeco-entity-lockup__caption"
-            ]
-            for selector in location_selectors:
-                try:
-                    location_elements = container.find_elements(By.CSS_SELECTOR, selector)
-                    for element in location_elements:
-                        location_text = element.text.strip()
-                        if location_text and "," in location_text:
-                            profile_data["location"] = location_text
-                            break
-                    if "location" in profile_data:
-                        break
-                except Exception:
-                    continue
-                    
-        except Exception as e:
-            logger.debug(f"Error extracting profile data: {str(e)}")
-        
-        # If we found any meaningful data, return it
-        if "profile_url" in profile_data or "name" in profile_data:
-            found_fields = [k for k in profile_data.keys() if k != "index"]
-            logger.info(f"Profile {index+1}: Found {', '.join(found_fields)}")
-            return profile_data
-        else:
-            logger.warning(f"Profile {index+1}: Could not extract any data")
-            return profile_data
-
-    def close(self):
-        """Close the browser and clean up resources."""
-        if self.driver:
-            self.driver.quit()
-            logger.info("WebDriver closed.")
-            
     def scrape_by_industry_and_role(self, industry="Technology", role="Software Engineer", num_pages=3):
         """
         Scrapes LinkedIn profiles based on industry and job role.
@@ -941,3 +938,103 @@ class LinkedInScraper:
         
         logger.info(f"Found {len(all_leads)} unique potential life coaching leads")
         return all_leads
+
+
+# Function to be imported and used by main.py
+def run_linkedin_scraper(sheets_client=None, max_leads: int = 50, headless: bool = True):
+    """
+    Run the LinkedIn scraper as a standalone function.
+    
+    Args:
+        sheets_client: Google Sheets client for saving results
+        max_leads: Maximum number of leads to collect
+        headless: Whether to run the browser in headless mode
+        
+    Returns:
+        Dictionary with scraping results
+    """
+    try:
+        from datetime import datetime
+        import traceback
+        
+        print("Starting LinkedIn scraper...")
+        
+        # Create the scraper
+        scraper = LinkedInScraper(headless=headless)
+        
+        # Run a comprehensive search for coaching leads
+        leads = scraper.scrape_for_coaching_leads(
+            num_pages=2,
+            target_count=max_leads
+        )
+        
+        # Close the scraper
+        scraper.close()
+        
+        # If Google Sheets client is provided, save results
+        if sheets_client:
+            try:
+                worksheet = sheets_client.open('LeadGenerationData').worksheet('LinkedInLeads')
+                
+                # Add header row if worksheet is empty
+                if worksheet.row_count <= 1:
+                    header = [
+                        "Name", "Headline", "Location", "Profile URL", 
+                        "Coaching Fit Score", "Notes", "Date Added"
+                    ]
+                    worksheet.append_row(header)
+                
+                # Add data rows
+                for lead in leads:
+                    row = [
+                        lead.get('name', ''),
+                        lead.get('headline', ''),
+                        lead.get('location', ''),
+                        lead.get('profile_url', ''),
+                        lead.get('coaching_fit_score', 0),
+                        lead.get('coaching_notes', ''),
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ]
+                    worksheet.append_row(row)
+                    
+                print(f"Saved {len(leads)} leads to Google Sheets")
+            except Exception as e:
+                logger.error(f"Error saving to Google Sheets: {str(e)}")
+                print(f"Error saving to Google Sheets: {str(e)}")
+        
+        # Return the results
+        results = {
+            "leads_scraped": len(leads),
+            "source": "linkedin",
+            "success": True
+        }
+        
+        return results
+    except Exception as e:
+        logger.error(f"Error running LinkedIn scraper: {str(e)}")
+        print(f"Error running LinkedIn scraper: {str(e)}")
+        traceback.print_exc()
+        return {
+            "leads_scraped": 0,
+            "source": "linkedin",
+            "success": False,
+            "error": str(e)
+        }
+
+
+# For testing
+if __name__ == "__main__":
+    try:
+        # Test the LinkedIn scraper
+        scraper = LinkedInScraper(headless=False)
+        
+        # Search for some leads
+        leads = scraper.scrape_by_industry_and_role("Technology", "CEO", num_pages=1)
+        
+        print(f"Found {len(leads)} leads")
+        
+        # Close the scraper
+        scraper.close()
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        traceback.print_exc()        
