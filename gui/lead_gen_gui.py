@@ -30,15 +30,24 @@ try:
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
     
-    # Now try to import from the scrapers package
-    from scrapers.linkedin_scraper import LinkedInScraper
-    logger.info("Successfully imported LinkedInScraper from scrapers package")
+    # Now try to import from the modular scrapers package
+    from scrapers.linkedin import LinkedInScraper
+    logger.info("Successfully imported LinkedInScraper from modular scrapers package")
 except ImportError as e:
     logger.error(f"Failed to import LinkedInScraper: {str(e)}")
     messagebox.showerror("Import Error", 
                         f"Could not import LinkedInScraper.\n\nError: {str(e)}\n\n"
-                        f"Please ensure 'D:\\lead_gen_tool\\scrapers\\linkedin_scraper.py' exists and "
-                        f"there is an __init__.py file in the scrapers directory.")
+                        f"Please ensure the scrapers/linkedin package exists with the necessary files.")
+
+# Import other modules dynamically
+try:
+    from scrapers.reddit_scraper import RedditScraper
+    from analysis.lead_scorer import LeadScorer
+    from communication.message_generator import MessageGenerator
+    from reporting.email_reporter import EmailReporter
+except ImportError as e:
+    logger.warning(f"Optional module import error: {str(e)}")
+    # We'll continue even if these modules aren't available
 
 class LeadGenerationGUI:
     """GUI for controlling lead generation tasks."""
@@ -58,14 +67,14 @@ class LeadGenerationGUI:
         # Initialize LinkedIn Scraper
         self.linkedin_scraper = None
         try:
-            if 'LinkedInScraper' in globals():
+            if LinkedInScraper is not None:
                 self.linkedin_scraper = LinkedInScraper(headless=False)
                 logger.info("LinkedIn Scraper initialized")
             else:
                 raise ImportError("LinkedInScraper module not found")
         except Exception as e:
             logger.error(f"Failed to initialize LinkedIn Scraper: {str(e)}")
-            messagebox.showerror("Initialization Error", f"Failed to initialize LinkedIn Scraper: {str(e)}")
+            messagebox.showerror("Initialization Error", f"Failed to initialize LinkedIn Scraper: {str(e)}\n\nPlease ensure all LinkedIn scraper modules are in the correct locations.")
 
         self.create_widgets()
         logger.info("GUI Initialized")
@@ -284,9 +293,9 @@ class LeadGenerationGUI:
     
     def run_task(self, task_func, task_name):
         """Run a task in a separate thread."""
-        threading.Thread(target=self._task_wrapper, args=(task_func, task_name), daemon=True).start()
+        threading.Thread(target=self.task_wrapper, args=(task_func, task_name), daemon=True).start()
     
-    def _task_wrapper(self, task_func, task_name):
+    def task_wrapper(self, task_func, task_name):
         """Run a task and handle errors."""
         try:
             logger.info(f"Starting {task_name}...")
@@ -294,14 +303,8 @@ class LeadGenerationGUI:
             logger.info(f"{task_name} completed successfully.")
             return result
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error running {task_name}: {error_msg}")
-            # Using a direct method call instead of lambda
-            self.root.after(0, self._show_error, task_name, error_msg)
-    
-    def _show_error(self, task_name, error_msg):
-        """Show error message dialog."""
-        messagebox.showerror("Task Error", f"Error running {task_name}: {error_msg}")
+            logger.error(f"Error running {task_name}: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("Task Error", f"Error running {task_name}: {str(e)}"))
     
     def run_reddit_scraper(self):
         """Placeholder for Reddit scraper functionality."""
@@ -349,30 +352,21 @@ class LeadGenerationGUI:
     def _execute_linkedin_search(self, industry, role, num_pages):
         """Execute LinkedIn search and update results."""
         try:
-            # Construct search URL manually
-            search_query = f"{industry} {role}"
-            search_url = f"https://www.linkedin.com/search/results/people/?keywords={search_query.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER"
-            
-            # Use scrape_profiles method instead
-            results = self.linkedin_scraper.scrape_profiles(
-                search_url=search_url,
+            results = self.linkedin_scraper.scrape_by_industry_and_role(
+                industry=industry, 
+                role=role, 
                 num_pages=num_pages
             )
             
-            # Store results in a variable to avoid lambda issues
-            self._temp_results = results
-            # Update UI on main thread
-            self.root.after(0, self._update_linkedin_results)
+            # Update UI from main thread
+            self.root.after(0, lambda: self._update_linkedin_results(results))
             return results
         except Exception as e:
-            # Just re-raise - the wrapper will handle it
-            raise
+            logger.error(f"Error in LinkedIn search: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("Search Error", f"Error: {str(e)}"))
 
-    def _update_linkedin_results(self):
+    def _update_linkedin_results(self, results):
         """Update the results text area with search results."""
-        # Get the results from our temp variable
-        results = getattr(self, '_temp_results', [])
-        
         self.linkedin_results.delete(1.0, tk.END)
         
         if not results or len(results) == 0:
@@ -436,14 +430,12 @@ class LeadGenerationGUI:
                 num_pages=2
             )
             
-            # Store results in a variable to avoid lambda issues
-            self._coaching_temp_results = results
-            # Update UI on main thread
-            self.root.after(0, self._update_coaching_results)
+            # Update UI from main thread
+            self.root.after(0, lambda: self._update_coaching_results(results))
             return results
         except Exception as e:
-            # Just re-raise - the wrapper will handle it
-            raise
+            logger.error(f"Error in keyword search: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("Search Error", f"Error: {str(e)}"))
 
     def run_coaching_prospect_search(self):
         """Run comprehensive coaching prospect search."""
@@ -457,51 +449,27 @@ class LeadGenerationGUI:
         
         # Run in a separate thread
         self.run_task(
-            self._execute_comprehensive_search,
+            lambda: self._execute_comprehensive_search(),
             "Comprehensive coaching prospect search"
         )
 
     def _execute_comprehensive_search(self):
         """Execute comprehensive search for coaching prospects."""
         try:
-            # Construct multiple search URLs for different targets
-            search_urls = []
+            results = self.linkedin_scraper.scrape_for_coaching_leads(
+                num_pages=2,
+                target_count=30
+            )
             
-            # Add some search criteria
-            keywords = ["career transition", "leadership development", "executive coaching", 
-                      "professional growth", "burnout", "work life balance"]
-            
-            # Search for each keyword
-            for keyword in keywords[:2]:  # Limit to first 2 for testing
-                url = f"https://www.linkedin.com/search/results/people/?keywords={keyword.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER"
-                results = self.linkedin_scraper.scrape_profiles(
-                    search_url=url,
-                    num_pages=1
-                )
-                if results:
-                    # Store results in a variable to avoid lambda issues
-                    self._coaching_temp_results = results
-                    # Update UI on main thread
-                    self.root.after(0, self._update_coaching_results)
-                    return results
-            
-            # If we got here, we didn't find any results
-            self.root.after(0, self._show_no_coaching_results)
-            return []
+            # Update UI from main thread
+            self.root.after(0, lambda: self._update_coaching_results(results))
+            return results
         except Exception as e:
-            # Just re-raise - the wrapper will handle it
-            raise
+            logger.error(f"Error in comprehensive search: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("Search Error", f"Error: {str(e)}"))
 
-    def _show_no_coaching_results(self):
-        """Show a message when no coaching results found."""
-        self.coaching_results.delete(1.0, tk.END)
-        self.coaching_results.insert(tk.END, "No coaching prospects found.")
-
-    def _update_coaching_results(self):
+    def _update_coaching_results(self, results):
         """Update the coaching results text area."""
-        # Get results from temp variable
-        results = getattr(self, '_coaching_temp_results', [])
-        
         self.coaching_results.delete(1.0, tk.END)
         
         if not results or len(results) == 0:
@@ -536,7 +504,6 @@ class LeadGenerationGUI:
         """Clear coaching results."""
         self.coaching_results.delete(1.0, tk.END)
         logger.info("Coaching results cleared")
-
 
 if __name__ == "__main__":
     root = tk.Tk()
