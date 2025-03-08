@@ -15,8 +15,14 @@ from datetime import datetime
 from typing import Dict, Any
 from dotenv import load_dotenv
 
-# Configure base logging
+# Ensure necessary directories exist
 os.makedirs('logs', exist_ok=True)
+os.makedirs('data', exist_ok=True)
+os.makedirs('data/cache', exist_ok=True)
+os.makedirs('data/output', exist_ok=True)
+os.makedirs('debug', exist_ok=True)
+
+# Configure base logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -26,11 +32,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger('main')
-
-# Ensure necessary directories exist
-os.makedirs('data', exist_ok=True)
-os.makedirs('data/cache', exist_ok=True)
-os.makedirs('data/output', exist_ok=True)
 
 # Load environment variables
 load_dotenv()
@@ -172,15 +173,13 @@ def run_linkedin_scraper(args):
         headless = getattr(args, 'headless', True)
         
         # Run the scraper
-        leads = run_linkedin_scraper(sheets_client, max_leads=max_leads, headless=headless)
+        results = run_linkedin_scraper(
+            sheets_client=sheets_client,
+            max_leads=max_leads,
+            headless=headless
+        )
         
-        results = {
-            "leads_scraped": len(leads),
-            "source": "linkedin",
-            "success": True
-        }
-        
-        print(f"LinkedIn scraper completed. Collected {len(leads)} leads.")
+        print(f"LinkedIn scraper completed. Collected {results.get('leads_scraped', 0)} leads.")
         return results
     except Exception as e:
         logger.error(f"Error running LinkedIn scraper: {str(e)}")
@@ -202,21 +201,23 @@ def run_reddit_scraper(args) -> Dict[str, Any]:
         print("Starting Reddit scraper...")
         sheets_client = get_sheets_client()
         
-        # Get max leads from args or use default
+        # Get parameters from args
         max_leads = getattr(args, 'max_leads', 50)
         save_csv = getattr(args, 'save_csv', True)
-        
-        # Get custom subreddits and keywords if provided
         subreddits = getattr(args, 'subreddits', None)
         keywords = getattr(args, 'keywords', None)
+        time_filter = getattr(args, 'time_filter', "month")
+        post_limit = getattr(args, 'post_limit', 100)
         
         # Run the scraper
         leads = run_reddit_scraper(
             sheets_client=sheets_client,
-            max_leads=max_leads,
-            save_csv=save_csv,
             subreddits=subreddits,
-            keywords=keywords
+            keywords=keywords,
+            time_filter=time_filter,
+            post_limit=post_limit,
+            save_csv=save_csv,
+            max_leads=max_leads
         )
         
         results = {
@@ -252,6 +253,7 @@ def run_lead_scorer(args) -> Dict[str, Any]:
         max_reddit_leads = getattr(args, 'max_reddit_leads', 50)
         use_ai_analysis = getattr(args, 'use_ai', True)
         model = getattr(args, 'model', "gpt-4")
+        threshold = getattr(args, 'threshold', 0.5)
         
         # Run the lead scorer
         results = run_lead_scorer(
@@ -259,12 +261,13 @@ def run_lead_scorer(args) -> Dict[str, Any]:
             max_linkedin_leads=max_linkedin_leads,
             max_reddit_leads=max_reddit_leads,
             use_ai_analysis=use_ai_analysis,
-            model=model
+            model=model,
+            threshold=threshold
         )
         
         results['success'] = True
         
-        print(f"Lead scoring completed. Processed {results.get('linkedin_leads_scored', 0) + results.get('reddit_leads_scored', 0)} leads.")
+        print(f"Lead scoring completed. Processed {results.get('total_leads_scored', 0)} leads.")
         return results
     except Exception as e:
         logger.error(f"Error running lead scorer: {str(e)}")
@@ -300,7 +303,7 @@ def run_message_generator(args) -> Dict[str, Any]:
         
         results['success'] = True
         
-        print(f"Message generation completed. Generated {results.get('linkedin_leads_processed', 0) + results.get('reddit_leads_processed', 0)} messages.")
+        print(f"Message generation completed. Generated {results.get('total_messages_generated', 0)} messages.")
         return results
     except Exception as e:
         logger.error(f"Error running message generator: {str(e)}")
@@ -394,7 +397,7 @@ def run_full_pipeline(args) -> Dict[str, Any]:
     if getattr(args, 'run_messages', True):
         message_results = run_message_generator(args)
         results["components"]["messages"] = message_results
-        results["total_messages"] += message_results.get("linkedin_leads_processed", 0) + message_results.get("reddit_leads_processed", 0)
+        results["total_messages"] += message_results.get("total_messages_generated", 0)
         
         if not message_results.get("success", False):
             results["success"] = False
@@ -435,12 +438,16 @@ def main():
     reddit_parser = subparsers.add_parser('reddit', help='Run Reddit scraper')
     reddit_parser.add_argument('--max-leads', type=int, default=50, help='Maximum number of leads to collect')
     reddit_parser.add_argument('--save-csv', action='store_true', help='Save results to CSV')
+    reddit_parser.add_argument('--time-filter', choices=['day', 'week', 'month', 'year', 'all'], default='month', help='Time filter for posts')
+    reddit_parser.add_argument('--post-limit', type=int, default=100, help='Maximum posts per subreddit')
     
     # Lead scorer command
     scorer_parser = subparsers.add_parser('scorer', help='Run lead scorer')
     scorer_parser.add_argument('--max-linkedin', type=int, dest='max_linkedin_leads', default=50)
     scorer_parser.add_argument('--max-reddit', type=int, dest='max_reddit_leads', default=50)
     scorer_parser.add_argument('--no-ai', dest='use_ai', action='store_false', help='Disable AI analysis')
+    scorer_parser.add_argument('--model', choices=['gpt-4', 'gpt-3.5-turbo'], default='gpt-4')
+    scorer_parser.add_argument('--threshold', type=float, default=0.5, help='Score threshold (0.0-1.0)')
     
     # Message generator command
     message_parser = subparsers.add_parser('messages', help='Run message generator')
@@ -462,6 +469,7 @@ def main():
     pipeline_parser.add_argument('--no-email', dest='run_email', action='store_false')
     pipeline_parser.add_argument('--max-leads', type=int, default=50)
     pipeline_parser.add_argument('--model', choices=['gpt-4', 'gpt-3.5-turbo'], default='gpt-4')
+    pipeline_parser.add_argument('--headless', action='store_true', help='Run browser in headless mode')
     
     # Parse arguments
     args = parser.parse_args()
